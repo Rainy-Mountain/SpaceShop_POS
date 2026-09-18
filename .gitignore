@@ -1,0 +1,43 @@
+# dependencies
+node_modules
+/node_modules
+/.pnp
+.pnp.*
+.yarn/*
+!.yarn/patches
+!.yarn/plugins
+!.yarn/releases
+!.yarn/versions
+
+# testing
+/coverage
+
+# next.js — Vercel 업로드 시 빌드 행(hang) 유발
+.next
+/.next/
+/out/
+
+# production
+/build
+
+# misc
+.DS_Store
+*.pem
+
+# debug
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+
+# env files — 시크릿/로컬 설정이 배포에 포함되지 않도록
+.env
+.env.local
+.env*.local
+
+# typescript
+*.tsbuildinfo
+next-env.d.ts
+
+# vercel — 로컬 링크/캐시가 업로드되면 배포가 멈출 수 있음
+.vercel

@@ -1,0 +1,411 @@
+import { supabase } from "@/lib/supabase";
+import {
+  LOCATION_LABELS,
+  LOCATION_TO_FIELD,
+  type InventoryQtyField,
+  type MovementLogItem,
+  type RecentActivityItem,
+  type SaleLogItem,
+  type StockLocation,
+} from "@/types/dashboard";
+
+function toQty(value: unknown): number {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "string") {
+    const parsed = Number(value.replace(/,/g, "").trim());
+    return Number.isFinite(parsed) ? parsed : 0;
+  }
+  return 0;
+}
+
+async function fetchInventoryQtys(productId: string): Promise<{
+  backup_qty: number;
+  storage_qty: number;
+  display_qty: number;
+}> {
+  const { data, error } = await supabase
+    .from("inventory")
+    .select("backup_qty, storage_qty, display_qty")
+    .eq("product_id", productId)
+    .maybeSingle();
+
+  if (error) throw new Error(error.message);
+  if (!data) throw new Error("해당 제품의 재고 정보를 찾을 수 없습니다.");
+
+  return {
+    backup_qty: toQty(data.backup_qty),
+    storage_qty: toQty(data.storage_qty),
+    display_qty: toQty(data.display_qty),
+  };
+}
+
+async function updateInventoryQtys(
+  productId: string,
+  next: Record<InventoryQtyField, number>
+): Promise<void> {
+  const { error } = await supabase
+    .from("inventory")
+    .update({
+      ...next,
+      last_updated: new Date().toISOString(),
+    })
+    .eq("product_id", productId);
+
+  if (error) throw new Error(error.message);
+}
+
+export async function updateProductPrice(
+  productId: string,
+  price: number
+): Promise<void> {
+  if (!Number.isFinite(price) || price < 0) {
+    throw new Error("가격은 0 이상의 숫자여야 합니다.");
+  }
+
+  const { error } = await supabase
+    .from("products")
+    .update({ price })
+    .eq("id", productId);
+
+  if (error) throw new Error(error.message);
+}
+
+/** 샵/백업 재고 개별 필드 수동 수정 */
+export async function updateInventoryField(
+  productId: string,
+  field: "storage_qty" | "backup_qty",
+  quantity: number
+): Promise<void> {
+  if (!Number.isInteger(quantity) || quantity < 0) {
+    throw new Error("재고 수량은 0 이상의 정수여야 합니다.");
+  }
+
+  const { data: existing, error: findError } = await supabase
+    .from("inventory")
+    .select("product_id")
+    .eq("product_id", productId)
+    .maybeSingle();
+
+  if (findError) throw new Error(findError.message);
+
+  if (existing?.product_id) {
+    const { error } = await supabase
+      .from("inventory")
+      .update({
+        [field]: quantity,
+        last_updated: new Date().toISOString(),
+      })
+      .eq("product_id", productId);
+
+    if (error) throw new Error(error.message);
+    return;
+  }
+
+  // inventory 행이 없으면 생성
+  const payload = {
+    product_id: productId,
+    storage_qty: field === "storage_qty" ? quantity : 0,
+    backup_qty: field === "backup_qty" ? quantity : 0,
+    display_qty: 0,
+    last_updated: new Date().toISOString(),
+  };
+
+  const { error } = await supabase.from("inventory").insert(payload);
+  if (error) throw new Error(error.message);
+}
+
+export async function deleteProduct(productId: string): Promise<void> {
+  const { error } = await supabase.from("products").delete().eq("id", productId);
+
+  if (error) throw new Error(error.message);
+}
+
+export async function transferStock(params: {
+  productId: string;
+  from: StockLocation;
+  to: StockLocation;
+  quantity: number;
+}): Promise<void> {
+  const { productId, from, to, quantity } = params;
+
+  if (!Number.isInteger(quantity) || quantity <= 0) {
+    throw new Error("이동 수량은 1 이상의 정수여야 합니다.");
+  }
+
+  if (from === to) {
+    throw new Error("출발지와 도착지가 같습니다.");
+  }
+
+  const current = await fetchInventoryQtys(productId);
+  const fromField = LOCATION_TO_FIELD[from];
+  const toField = LOCATION_TO_FIELD[to];
+
+  if (current[fromField] < quantity) {
+    throw new Error(
+      `${LOCATION_LABELS[from]} 재고가 부족합니다. (현재 ${current[fromField]}개)`
+    );
+  }
+
+  const next: Record<InventoryQtyField, number> = {
+    backup_qty: current.backup_qty,
+    storage_qty: current.storage_qty,
+    display_qty: current.display_qty,
+  };
+
+  next[fromField] -= quantity;
+  next[toField] += quantity;
+
+  await updateInventoryQtys(productId, next);
+
+  const { error: logError } = await supabase.from("movement_logs").insert({
+    product_id: productId,
+    from_location: from,
+    to_location: to,
+    quantity,
+  });
+
+  if (logError) {
+    throw new Error(
+      `재고는 이동됐지만 이동 기록 저장에 실패했습니다: ${logError.message}`
+    );
+  }
+}
+
+export async function registerSale(params: {
+  productId: string;
+  dayNumber: number;
+  soldFrom: StockLocation;
+  quantity: number;
+  unitPrice: number;
+}): Promise<void> {
+  const { productId, dayNumber, soldFrom, quantity, unitPrice } = params;
+
+  if (!Number.isInteger(quantity) || quantity <= 0) {
+    throw new Error("판매 수량은 1 이상의 정수여야 합니다.");
+  }
+
+  const current = await fetchInventoryQtys(productId);
+  const field = LOCATION_TO_FIELD[soldFrom];
+
+  if (current[field] < quantity) {
+    throw new Error(
+      `${LOCATION_LABELS[soldFrom]} 재고가 부족합니다. (현재 ${current[field]}개)`
+    );
+  }
+
+  const totalPrice = unitPrice * quantity;
+  const nextQty = current[field] - quantity;
+
+  const { error: saleError } = await supabase.from("sales_logs").insert({
+    product_id: productId,
+    day_number: dayNumber,
+    sold_from: soldFrom,
+    quantity,
+    total_price: totalPrice,
+  });
+
+  if (saleError) throw new Error(saleError.message);
+
+  try {
+    await updateInventoryQtys(productId, {
+      backup_qty: current.backup_qty,
+      storage_qty: current.storage_qty,
+      display_qty: current.display_qty,
+      [field]: nextQty,
+    });
+  } catch (error) {
+    const message =
+      error instanceof Error ? error.message : "재고 차감에 실패했습니다.";
+    throw new Error(`판매 기록은 저장됐지만 재고 차감에 실패했습니다: ${message}`);
+  }
+}
+
+/** 키오스크 장바구니 일괄 결제 (샵 재고에서 차감) */
+export async function checkoutKioskCart(params: {
+  dayNumber: number;
+  items: Array<{
+    productId: string;
+    quantity: number;
+    unitPrice: number;
+  }>;
+}): Promise<void> {
+  const { dayNumber, items } = params;
+
+  if (items.length === 0) {
+    throw new Error("장바구니가 비어 있습니다.");
+  }
+
+  for (const item of items) {
+    if (!Number.isInteger(item.quantity) || item.quantity <= 0) {
+      throw new Error("판매 수량은 1 이상의 정수여야 합니다.");
+    }
+  }
+
+  await Promise.all(
+    items.map((item) =>
+      registerSale({
+        productId: item.productId,
+        dayNumber,
+        soldFrom: "창고",
+        quantity: item.quantity,
+        unitPrice: item.unitPrice,
+      })
+    )
+  );
+}
+
+export async function fetchRecentActivities(
+  limit = 30
+): Promise<RecentActivityItem[]> {
+  const [salesResult, movementsResult, productsResult] = await Promise.all([
+    supabase
+      .from("sales_logs")
+      .select("id, product_id, day_number, sold_from, quantity, total_price, created_at")
+      .order("created_at", { ascending: false })
+      .limit(limit),
+    supabase
+      .from("movement_logs")
+      .select(
+        "id, product_id, from_location, to_location, quantity, created_at"
+      )
+      .order("created_at", { ascending: false })
+      .limit(limit),
+    supabase.from("products").select("id, name, brand"),
+  ]);
+
+  if (salesResult.error) {
+    console.error("sales_logs 조회 실패:", salesResult.error.message);
+  }
+  if (movementsResult.error) {
+    console.error("movement_logs 조회 실패:", movementsResult.error.message);
+  }
+
+  const productMap = new Map<string, { name: string; brand: string }>();
+  for (const product of productsResult.data ?? []) {
+    productMap.set(String(product.id), {
+      name: String(product.name ?? "알 수 없음"),
+      brand: String(product.brand ?? ""),
+    });
+  }
+
+  const sales: SaleLogItem[] = (salesResult.data ?? []).map((row) => {
+    const product = productMap.get(String(row.product_id));
+    return {
+      id: String(row.id),
+      type: "sale",
+      productId: String(row.product_id),
+      productName: product?.name ?? "알 수 없음",
+      brand: product?.brand ?? "",
+      dayNumber: toQty(row.day_number),
+      soldFrom: row.sold_from as StockLocation,
+      quantity: toQty(row.quantity),
+      totalPrice: toQty(row.total_price),
+      createdAt: String(row.created_at ?? ""),
+    };
+  });
+
+  const movements: MovementLogItem[] = (movementsResult.data ?? []).map(
+    (row) => {
+      const product = productMap.get(String(row.product_id));
+      return {
+        id: String(row.id),
+        type: "movement",
+        productId: String(row.product_id),
+        productName: product?.name ?? "알 수 없음",
+        brand: product?.brand ?? "",
+        fromLocation: row.from_location as StockLocation,
+        toLocation: row.to_location as StockLocation,
+        quantity: toQty(row.quantity),
+        createdAt: String(row.created_at ?? ""),
+      };
+    }
+  );
+
+  return [...sales, ...movements].sort((a, b) => {
+    return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
+  });
+}
+
+export async function undoSale(saleId: string): Promise<void> {
+  const { data: sale, error: findError } = await supabase
+    .from("sales_logs")
+    .select("id, product_id, sold_from, quantity, total_price")
+    .eq("id", saleId)
+    .maybeSingle();
+
+  if (findError) throw new Error(findError.message);
+  if (!sale) throw new Error("취소할 판매 내역을 찾을 수 없습니다.");
+
+  const productId = String(sale.product_id);
+  const soldFrom = sale.sold_from as StockLocation;
+  const quantity = toQty(sale.quantity);
+  const field = LOCATION_TO_FIELD[soldFrom];
+
+  const current = await fetchInventoryQtys(productId);
+  const next: Record<InventoryQtyField, number> = {
+    backup_qty: current.backup_qty,
+    storage_qty: current.storage_qty,
+    display_qty: current.display_qty,
+  };
+  next[field] += quantity;
+
+  await updateInventoryQtys(productId, next);
+
+  const { error: deleteError } = await supabase
+    .from("sales_logs")
+    .delete()
+    .eq("id", saleId);
+
+  if (deleteError) {
+    throw new Error(
+      `재고는 복구됐지만 판매 기록 삭제에 실패했습니다: ${deleteError.message}`
+    );
+  }
+}
+
+export async function undoMovement(movementId: string): Promise<void> {
+  const { data: movement, error: findError } = await supabase
+    .from("movement_logs")
+    .select("id, product_id, from_location, to_location, quantity")
+    .eq("id", movementId)
+    .maybeSingle();
+
+  if (findError) throw new Error(findError.message);
+  if (!movement) throw new Error("취소할 이동 내역을 찾을 수 없습니다.");
+
+  const productId = String(movement.product_id);
+  const from = movement.from_location as StockLocation;
+  const to = movement.to_location as StockLocation;
+  const quantity = toQty(movement.quantity);
+
+  const fromField = LOCATION_TO_FIELD[from];
+  const toField = LOCATION_TO_FIELD[to];
+  const current = await fetchInventoryQtys(productId);
+
+  if (current[toField] < quantity) {
+    throw new Error(
+      `이동 취소 불가: ${LOCATION_LABELS[to]} 재고가 부족합니다. (현재 ${current[toField]}개)`
+    );
+  }
+
+  const next: Record<InventoryQtyField, number> = {
+    backup_qty: current.backup_qty,
+    storage_qty: current.storage_qty,
+    display_qty: current.display_qty,
+  };
+  next[fromField] += quantity;
+  next[toField] -= quantity;
+
+  await updateInventoryQtys(productId, next);
+
+  const { error: deleteError } = await supabase
+    .from("movement_logs")
+    .delete()
+    .eq("id", movementId);
+
+  if (deleteError) {
+    throw new Error(
+      `재고는 복구됐지만 이동 기록 삭제에 실패했습니다: ${deleteError.message}`
+    );
+  }
+}
