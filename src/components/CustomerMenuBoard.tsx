@@ -155,8 +155,8 @@ function PillButton({
       className={[
         "shrink-0 rounded-full px-3.5 py-2 text-xs font-semibold transition sm:text-sm",
         active
-          ? "bg-slate-900 text-white shadow-sm"
-          : "border border-slate-200 bg-white text-slate-700 hover:border-slate-300",
+          ? "bg-gray-900 text-white"
+          : "bg-gray-100 text-gray-700 hover:bg-gray-200",
       ].join(" ")}
     >
       {label}
@@ -171,17 +171,17 @@ function ProductStatusBadges({ row }: { row: DashboardRow }) {
   return (
     <div className="flex shrink-0 flex-wrap items-center justify-end gap-1">
       {soldOut && (
-        <span className="rounded-md bg-slate-200 px-1.5 py-0.5 text-[10px] font-bold text-slate-600">
+        <span className="rounded-full bg-gray-200 px-2 py-0.5 text-[10px] font-semibold text-gray-600">
           품절
         </span>
       )}
       {lowStock && (
-        <span className="rounded-md bg-orange-500 px-1.5 py-0.5 text-[10px] font-bold text-white">
+        <span className="rounded-full bg-orange-100 px-2 py-0.5 text-[10px] font-semibold text-orange-700">
           품절 임박
         </span>
       )}
       {row.liquorType ? (
-        <span className="rounded-md bg-sky-100 px-1.5 py-0.5 text-[10px] font-semibold text-sky-700">
+        <span className="rounded-full bg-sky-50 px-2 py-0.5 text-[10px] font-semibold text-sky-700">
           {row.liquorType}
         </span>
       ) : null}
@@ -191,7 +191,7 @@ function ProductStatusBadges({ row }: { row: DashboardRow }) {
 
 /**
  * 아임웹 iframe용 고객 열람(Read-only) 재고 현황.
- * 가격·재고 숫자는 UI에 노출하지 않음.
+ * 가격·재고 숫자는 UI에 노출하지 않음. Minimal White 톤.
  */
 export default function CustomerMenuBoard() {
   const [products, setProducts] = useState<DashboardRow[]>([]);
@@ -200,6 +200,7 @@ export default function CustomerMenuBoard() {
   const [companyFilter, setCompanyFilter] =
     useState<CompanyFilterValue>("전체");
   const [liquorFilter, setLiquorFilter] = useState<LiquorFilterValue>("전체");
+  const [searchTerm, setSearchTerm] = useState("");
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -288,6 +289,8 @@ export default function CustomerMenuBoard() {
   }, []);
 
   const filteredProducts = useMemo(() => {
+    const keyword = searchTerm.trim().toLowerCase();
+
     return products.filter((row) => {
       if (companyFilter !== "전체" && row.companyType !== companyFilter) {
         return false;
@@ -295,9 +298,14 @@ export default function CustomerMenuBoard() {
       if (!matchesLiquorFilter(row.liquorType, liquorFilter)) {
         return false;
       }
+      if (keyword) {
+        const inName = row.name.toLowerCase().includes(keyword);
+        const inBrand = row.brand.toLowerCase().includes(keyword);
+        if (!inName && !inBrand) return false;
+      }
       return true;
     });
-  }, [products, companyFilter, liquorFilter]);
+  }, [products, companyFilter, liquorFilter, searchTerm]);
 
   const companyGroups = useMemo(
     () => groupFilteredProducts(filteredProducts),
@@ -305,18 +313,54 @@ export default function CustomerMenuBoard() {
   );
 
   return (
-    <div className="flex min-h-screen w-full flex-col bg-slate-50">
-      <header className="sticky top-0 z-20 border-b border-slate-200 bg-white px-3 pb-3 pt-4 sm:px-4">
+    <main className="flex min-h-screen w-full flex-col bg-gray-50">
+      <header className="sticky top-0 z-20 border-b border-gray-200 bg-white px-3 pb-3 pt-4 sm:px-4">
         <div className="text-center">
-          <h1 className="text-xl font-extrabold leading-tight tracking-tight text-slate-900 whitespace-pre-line sm:text-2xl">
+          <h1 className="text-xl font-extrabold leading-tight tracking-tight text-gray-900 whitespace-pre-line sm:text-2xl">
             {"스페이스 샵 4주년\n구매 가능 리스트"}
           </h1>
-          <p className="mt-2 text-xs text-slate-500 sm:text-sm">
+          <p className="mt-2 text-xs text-gray-500 sm:text-sm">
             스페이스 컴퍼니 코리아 제품과 타사 제품 라인업입니다.
           </p>
         </div>
 
-        <div className="mt-4 space-y-2">
+        <div className="relative mx-auto mt-4 max-w-xl">
+          <span
+            className="pointer-events-none absolute top-1/2 left-3.5 -translate-y-1/2 text-gray-400"
+            aria-hidden
+          >
+            <svg
+              xmlns="http://www.w3.org/2000/svg"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              className="h-4 w-4"
+            >
+              <circle cx="11" cy="11" r="7" />
+              <path d="m20 20-3.5-3.5" strokeLinecap="round" />
+            </svg>
+          </span>
+          <input
+            type="text"
+            value={searchTerm}
+            onChange={(event) => setSearchTerm(event.target.value)}
+            placeholder="제품명 또는 브랜드명 검색"
+            className="w-full rounded-xl border border-gray-200 bg-white py-2.5 pr-10 pl-10 text-sm text-gray-900 outline-none placeholder:text-gray-400 focus:border-gray-900"
+          />
+          {searchTerm && (
+            <button
+              type="button"
+              onClick={() => setSearchTerm("")}
+              className="absolute top-1/2 right-2.5 flex h-7 w-7 -translate-y-1/2 items-center justify-center rounded-full text-gray-400 hover:bg-gray-100 hover:text-gray-700"
+              aria-label="검색어 지우기"
+            >
+              ✕
+            </button>
+          )}
+        </div>
+
+        <div className="mt-3 space-y-2">
           <div className="flex gap-1.5 overflow-x-auto pb-0.5 [-ms-overflow-style:none] [scrollbar-width:none] sm:flex-wrap [&::-webkit-scrollbar]:hidden">
             {COMPANY_PILLS.map((pill) => (
               <PillButton
@@ -341,37 +385,40 @@ export default function CustomerMenuBoard() {
         </div>
       </header>
 
-      <div className="min-h-0 flex-1 overflow-y-auto px-2 py-3 sm:px-4 sm:py-4">
+      <div className="min-h-0 flex-1 overflow-y-auto px-2 py-4 sm:px-4 sm:py-5">
         {error && (
-          <div className="mb-3 rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-800">
+          <div className="mb-3 rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">
             {error}
           </div>
         )}
 
         {loading ? (
           <div className="space-y-6">
-            <div className="h-8 w-64 animate-pulse rounded bg-slate-200/80" />
-            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+            <div className="h-8 w-64 animate-pulse rounded-lg bg-gray-200" />
+            <div className="columns-1 gap-4 md:columns-2 xl:columns-3">
               {Array.from({ length: 6 }).map((_, index) => (
                 <div
                   key={index}
-                  className="h-48 animate-pulse rounded-2xl bg-slate-200/70"
-                />
+                  className="mb-4 break-inside-avoid"
+                  style={{ height: `${140 + (index % 3) * 48}px` }}
+                >
+                  <div className="h-full animate-pulse rounded-xl border border-gray-200 bg-white shadow-sm" />
+                </div>
               ))}
             </div>
           </div>
         ) : companyGroups.length === 0 ? (
-          <p className="py-16 text-center text-sm text-slate-500">
+          <p className="py-16 text-center text-sm text-gray-500">
             표시할 제품이 없습니다
           </p>
         ) : (
           <div className="space-y-8">
             {companyGroups.map((company) => (
               <section key={company.companyType}>
-                <div className="mb-3 flex items-end justify-between gap-3">
-                  <div className="flex min-w-0 items-center gap-2">
+                <div className="mb-4 flex items-end justify-between gap-3">
+                  <div className="flex min-w-0 items-center gap-2.5">
                     <span
-                      className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-sky-100 text-sky-600"
+                      className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-sky-50 text-sky-600"
                       aria-hidden
                     >
                       <svg
@@ -388,24 +435,24 @@ export default function CustomerMenuBoard() {
                         />
                       </svg>
                     </span>
-                    <h2 className="truncate text-lg font-extrabold text-slate-900 sm:text-xl">
+                    <h2 className="truncate text-lg font-extrabold text-gray-900 sm:text-xl">
                       {company.label}
                     </h2>
                   </div>
-                  <p className="shrink-0 text-xs text-slate-500 sm:text-sm">
+                  <p className="shrink-0 text-xs text-gray-500 sm:text-sm">
                     총 {company.totalCount}개 품목 (품절 {company.soldOutCount}
                     개)
                   </p>
                 </div>
 
-                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                <div className="columns-1 gap-4 md:columns-2 xl:columns-3">
                   {company.brands.map((brandGroup) => (
                     <article
                       key={`${company.companyType}-${brandGroup.brand}`}
-                      className="flex flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm"
+                      className="mb-4 break-inside-avoid overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm"
                     >
-                      <div className="flex items-baseline justify-between gap-2 border-b border-slate-100 px-3.5 py-3">
-                        <h3 className="min-w-0 truncate text-base font-bold text-slate-900">
+                      <div className="flex items-baseline justify-between gap-2 border-b border-gray-100 px-3.5 py-3">
+                        <h3 className="min-w-0 truncate text-base font-bold text-gray-900">
                           {brandGroup.brand}
                         </h3>
                         <span className="shrink-0 text-sm font-semibold text-sky-600">
@@ -413,7 +460,7 @@ export default function CustomerMenuBoard() {
                         </span>
                       </div>
 
-                      <ul className="divide-y divide-slate-50 px-2 py-1">
+                      <ul className="divide-y divide-gray-100 px-2 py-1">
                         {brandGroup.products.map((row) => {
                           const soldOut = row.storageQty === 0;
                           return (
@@ -425,8 +472,8 @@ export default function CustomerMenuBoard() {
                                 className={[
                                   "min-w-0 flex-1 text-sm leading-snug",
                                   soldOut
-                                    ? "text-slate-400 line-through"
-                                    : "font-medium text-slate-800",
+                                    ? "text-gray-400 line-through"
+                                    : "font-medium text-gray-800",
                                 ].join(" ")}
                               >
                                 {row.name}
@@ -444,6 +491,6 @@ export default function CustomerMenuBoard() {
           </div>
         )}
       </div>
-    </div>
+    </main>
   );
 }
