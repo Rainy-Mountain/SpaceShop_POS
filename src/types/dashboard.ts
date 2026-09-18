@@ -25,6 +25,7 @@ export interface ProductWithInventory {
   name: string;
   company_type: string;
   price: number | string | null;
+  liquor_type?: string | null;
   inventory: InventoryRecord | InventoryRecord[] | null;
 }
 
@@ -34,6 +35,7 @@ export interface DashboardRow {
   name: string;
   companyType: string;
   price: number;
+  liquorType: string;
   storageQty: number;
   backupQty: number;
   totalQty: number;

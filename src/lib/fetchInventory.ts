@@ -38,6 +38,7 @@ export function mapProductToRow(
     name: product.name || "-",
     companyType: product.company_type || "-",
     price: toNumber(product.price),
+    liquorType: String(product.liquor_type ?? "").trim(),
     storageQty,
     backupQty,
     totalQty: storageQty + backupQty,

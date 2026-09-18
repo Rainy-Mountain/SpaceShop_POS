@@ -2,20 +2,63 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { fetchInventoryDashboardData } from "@/lib/fetchInventory";
-import {
-  getBrandInitialKey,
-  sortInitialKeys,
-} from "@/lib/koreanInitial";
 import { supabase } from "@/lib/supabase";
-import type { CompanyFilter, DashboardRow } from "@/types/dashboard";
+import type { DashboardRow } from "@/types/dashboard";
 
-type ViewMode = "grid" | "list";
+/** 제조사 필터 UI 값 → DB company_type 매핑 */
+type CompanyFilterValue = "전체" | "자사" | "타사";
+type LiquorFilterValue =
+  | "전체"
+  | "위스키"
+  | "브랜디"
+  | "럼"
+  | "리큐르"
+  | "기타";
 
-const COMPANY_FILTERS: CompanyFilter[] = ["전체", "자사", "타사"];
+type BrandGroup = {
+  brand: string;
+  products: DashboardRow[];
+  totalCount: number;
+  soldOutCount: number;
+};
 
-function formatPrice(value: number): string {
-  return new Intl.NumberFormat("ko-KR").format(value);
-}
+type CompanyGroup = {
+  companyType: string;
+  label: string;
+  brands: BrandGroup[];
+  totalCount: number;
+  soldOutCount: number;
+};
+
+const COMPANY_PILLS: Array<{ value: CompanyFilterValue; label: string }> = [
+  { value: "전체", label: "전체 보기" },
+  { value: "자사", label: "스페이스 컴퍼니 코리아" },
+  { value: "타사", label: "타사 제품" },
+];
+
+const LIQUOR_PILLS: Array<{ value: LiquorFilterValue; label: string }> = [
+  { value: "전체", label: "전체 주종" },
+  { value: "위스키", label: "위스키" },
+  { value: "브랜디", label: "브랜디" },
+  { value: "럼", label: "럼" },
+  { value: "리큐르", label: "리큐르" },
+  { value: "기타", label: "기타" },
+];
+
+const KNOWN_LIQUOR_TYPES = new Set<string>([
+  "위스키",
+  "브랜디",
+  "럼",
+  "리큐르",
+  "기타",
+]);
+
+const COMPANY_LABELS: Record<string, string> = {
+  자사: "스페이스 컴퍼니 코리아",
+  타사: "타사 제품",
+};
+
+const COMPANY_ORDER = ["자사", "타사"];
 
 function toNumber(value: unknown): number {
   if (typeof value === "number" && Number.isFinite(value)) return value;
@@ -26,19 +69,137 @@ function toNumber(value: unknown): number {
   return 0;
 }
 
+function matchesLiquorFilter(
+  liquorType: string,
+  filter: LiquorFilterValue
+): boolean {
+  if (filter === "전체") return true;
+  if (filter === "기타") {
+    if (!liquorType) return true;
+    return !KNOWN_LIQUOR_TYPES.has(liquorType) || liquorType === "기타";
+  }
+  return liquorType === filter;
+}
+
+function companyLabel(companyType: string): string {
+  return COMPANY_LABELS[companyType] ?? companyType;
+}
+
+function groupFilteredProducts(rows: DashboardRow[]): CompanyGroup[] {
+  const byCompany = new Map<string, Map<string, DashboardRow[]>>();
+
+  for (const row of rows) {
+    const companyKey = row.companyType || "기타";
+    const brandKey = row.brand || "미지정";
+
+    if (!byCompany.has(companyKey)) {
+      byCompany.set(companyKey, new Map());
+    }
+    const brandMap = byCompany.get(companyKey)!;
+    if (!brandMap.has(brandKey)) {
+      brandMap.set(brandKey, []);
+    }
+    brandMap.get(brandKey)!.push(row);
+  }
+
+  const companyKeys = [
+    ...COMPANY_ORDER.filter((key) => byCompany.has(key)),
+    ...[...byCompany.keys()]
+      .filter((key) => !COMPANY_ORDER.includes(key))
+      .sort((a, b) => a.localeCompare(b, "ko")),
+  ];
+
+  return companyKeys.map((companyType) => {
+    const brandMap = byCompany.get(companyType)!;
+    const brandNames = [...brandMap.keys()].sort((a, b) =>
+      a.localeCompare(b, "ko")
+    );
+
+    const brands: BrandGroup[] = brandNames.map((brand) => {
+      const products = brandMap.get(brand)!;
+      const soldOutCount = products.filter((p) => p.storageQty === 0).length;
+      return {
+        brand,
+        products,
+        totalCount: products.length,
+        soldOutCount,
+      };
+    });
+
+    const totalCount = brands.reduce((sum, b) => sum + b.totalCount, 0);
+    const soldOutCount = brands.reduce((sum, b) => sum + b.soldOutCount, 0);
+
+    return {
+      companyType,
+      label: companyLabel(companyType),
+      brands,
+      totalCount,
+      soldOutCount,
+    };
+  });
+}
+
+function PillButton({
+  label,
+  active,
+  onClick,
+}: {
+  label: string;
+  active: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={[
+        "shrink-0 rounded-full px-3.5 py-2 text-xs font-semibold transition sm:text-sm",
+        active
+          ? "bg-slate-900 text-white shadow-sm"
+          : "border border-slate-200 bg-white text-slate-700 hover:border-slate-300",
+      ].join(" ")}
+    >
+      {label}
+    </button>
+  );
+}
+
+function ProductStatusBadges({ row }: { row: DashboardRow }) {
+  const soldOut = row.storageQty === 0;
+  const lowStock = row.storageQty > 0 && row.storageQty <= 2;
+
+  return (
+    <div className="flex shrink-0 flex-wrap items-center justify-end gap-1">
+      {soldOut && (
+        <span className="rounded-md bg-slate-200 px-1.5 py-0.5 text-[10px] font-bold text-slate-600">
+          품절
+        </span>
+      )}
+      {lowStock && (
+        <span className="rounded-md bg-orange-500 px-1.5 py-0.5 text-[10px] font-bold text-white">
+          품절 임박
+        </span>
+      )}
+      {row.liquorType ? (
+        <span className="rounded-md bg-sky-100 px-1.5 py-0.5 text-[10px] font-semibold text-sky-700">
+          {row.liquorType}
+        </span>
+      ) : null}
+    </div>
+  );
+}
+
 /**
  * 아임웹 iframe용 고객 열람(Read-only) 재고 현황.
- * 데이터 페칭·Realtime은 useEffect 안에서만 실행.
+ * 가격·재고 숫자는 UI에 노출하지 않음.
  */
 export default function CustomerMenuBoard() {
   const [products, setProducts] = useState<DashboardRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [search, setSearch] = useState("");
-  const [companyFilter, setCompanyFilter] = useState<CompanyFilter>("전체");
-  const [viewMode, setViewMode] = useState<ViewMode>("grid");
-  const [selectedInitial, setSelectedInitial] = useState<string | null>(null);
-  const [selectedBrand, setSelectedBrand] = useState<string | null>(null);
+  const [companyFilter, setCompanyFilter] =
+    useState<CompanyFilterValue>("전체");
+  const [liquorFilter, setLiquorFilter] = useState<LiquorFilterValue>("전체");
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -126,303 +287,161 @@ export default function CustomerMenuBoard() {
     };
   }, []);
 
-  const companyFiltered = useMemo(() => {
-    if (companyFilter === "전체") return products;
-    return products.filter((row) => row.companyType === companyFilter);
-  }, [products, companyFilter]);
-
-  const availableInitials = useMemo(() => {
-    const keys = new Set<string>();
-    for (const row of companyFiltered) {
-      const key = getBrandInitialKey(row.brand);
-      if (key) keys.add(key);
-    }
-    return sortInitialKeys(keys);
-  }, [companyFiltered]);
-
-  const brandsForInitial = useMemo(() => {
-    if (!selectedInitial) return [];
-    const seen = new Set<string>();
-    const brands: string[] = [];
-    for (const row of companyFiltered) {
-      if (getBrandInitialKey(row.brand) !== selectedInitial) continue;
-      if (seen.has(row.brand)) continue;
-      seen.add(row.brand);
-      brands.push(row.brand);
-    }
-    return brands;
-  }, [companyFiltered, selectedInitial]);
-
-  const filtered = useMemo(() => {
-    const keyword = search.trim().toLowerCase();
-
-    return companyFiltered.filter((row) => {
-      if (selectedInitial && getBrandInitialKey(row.brand) !== selectedInitial) {
+  const filteredProducts = useMemo(() => {
+    return products.filter((row) => {
+      if (companyFilter !== "전체" && row.companyType !== companyFilter) {
         return false;
       }
-      if (selectedBrand && row.brand !== selectedBrand) {
+      if (!matchesLiquorFilter(row.liquorType, liquorFilter)) {
         return false;
       }
-      if (!keyword) return true;
-      return (
-        row.name.toLowerCase().includes(keyword) ||
-        row.brand.toLowerCase().includes(keyword)
-      );
+      return true;
     });
-  }, [companyFiltered, search, selectedInitial, selectedBrand]);
+  }, [products, companyFilter, liquorFilter]);
 
-  function clearSearchAndFilters() {
-    setSearch("");
-    setSelectedInitial(null);
-    setSelectedBrand(null);
-  }
-
-  function handleSelectInitial(initial: string) {
-    setSelectedBrand(null);
-    setSelectedInitial((prev) => (prev === initial ? null : initial));
-  }
-
-  function handleSelectBrand(brand: string) {
-    setSelectedBrand((prev) => (prev === brand ? null : brand));
-  }
-
-  function handleCompanyFilterChange(filter: CompanyFilter) {
-    setCompanyFilter(filter);
-    setSelectedInitial(null);
-    setSelectedBrand(null);
-  }
+  const companyGroups = useMemo(
+    () => groupFilteredProducts(filteredProducts),
+    [filteredProducts]
+  );
 
   return (
     <div className="flex min-h-screen w-full flex-col bg-slate-50">
-      <div className="sticky top-0 z-20 border-b border-slate-200 bg-white px-2 py-2 sm:px-3">
-        <div className="flex items-center gap-2">
-          <div className="relative min-w-0 flex-1">
-            <input
-              type="search"
-              value={search}
-              onChange={(event) => setSearch(event.target.value)}
-              placeholder="브랜드·제품 검색"
-              className="w-full rounded-lg border border-slate-200 bg-slate-50 py-2 pr-9 pl-3 text-sm outline-none focus:border-sky-400 focus:bg-white focus:ring-2 focus:ring-sky-100"
-            />
-            {(search || selectedInitial || selectedBrand) && (
-              <button
-                type="button"
-                onClick={clearSearchAndFilters}
-                className="absolute top-1/2 right-1.5 flex h-7 w-7 -translate-y-1/2 items-center justify-center rounded-full text-slate-400 hover:bg-slate-200 hover:text-slate-700"
-                aria-label="검색·필터 초기화"
-              >
-                ✕
-              </button>
-            )}
-          </div>
-
-          <div className="inline-flex shrink-0 rounded-lg bg-slate-100 p-0.5">
-            <button
-              type="button"
-              onClick={() => setViewMode("grid")}
-              className={[
-                "rounded-md px-2.5 py-1.5 text-xs font-semibold",
-                viewMode === "grid"
-                  ? "bg-white text-slate-900 shadow-sm"
-                  : "text-slate-600",
-              ].join(" ")}
-              aria-label="그리드 보기"
-            >
-              ⊞
-            </button>
-            <button
-              type="button"
-              onClick={() => setViewMode("list")}
-              className={[
-                "rounded-md px-2.5 py-1.5 text-xs font-semibold",
-                viewMode === "list"
-                  ? "bg-white text-slate-900 shadow-sm"
-                  : "text-slate-600",
-              ].join(" ")}
-              aria-label="목록 보기"
-            >
-              ☰
-            </button>
-          </div>
+      <header className="sticky top-0 z-20 border-b border-slate-200 bg-white px-3 pb-3 pt-4 sm:px-4">
+        <div className="text-center">
+          <h1 className="text-xl font-extrabold leading-tight tracking-tight text-slate-900 whitespace-pre-line sm:text-2xl">
+            {"스페이스 샵 4주년\n구매 가능 리스트"}
+          </h1>
+          <p className="mt-2 text-xs text-slate-500 sm:text-sm">
+            스페이스 컴퍼니 코리아 제품과 타사 제품 라인업입니다.
+          </p>
         </div>
 
-        <div className="mt-2 flex flex-wrap items-center gap-1.5">
-          <div className="inline-flex rounded-lg bg-slate-100 p-0.5">
-            {COMPANY_FILTERS.map((filter) => (
-              <button
-                key={filter}
-                type="button"
-                onClick={() => handleCompanyFilterChange(filter)}
-                className={[
-                  "rounded-md px-2.5 py-1 text-xs font-semibold",
-                  companyFilter === filter
-                    ? "bg-sky-600 text-white shadow-sm"
-                    : "text-slate-600",
-                ].join(" ")}
-              >
-                {filter}
-              </button>
+        <div className="mt-4 space-y-2">
+          <div className="flex gap-1.5 overflow-x-auto pb-0.5 [-ms-overflow-style:none] [scrollbar-width:none] sm:flex-wrap [&::-webkit-scrollbar]:hidden">
+            {COMPANY_PILLS.map((pill) => (
+              <PillButton
+                key={pill.value}
+                label={pill.label}
+                active={companyFilter === pill.value}
+                onClick={() => setCompanyFilter(pill.value)}
+              />
+            ))}
+          </div>
+
+          <div className="flex gap-1.5 overflow-x-auto pb-0.5 [-ms-overflow-style:none] [scrollbar-width:none] sm:flex-wrap [&::-webkit-scrollbar]:hidden">
+            {LIQUOR_PILLS.map((pill) => (
+              <PillButton
+                key={pill.value}
+                label={pill.label}
+                active={liquorFilter === pill.value}
+                onClick={() => setLiquorFilter(pill.value)}
+              />
             ))}
           </div>
         </div>
+      </header>
 
-        {availableInitials.length > 0 && (
-          <div className="mt-2 flex flex-wrap gap-1">
-            {availableInitials.map((initial) => (
-              <button
-                key={initial}
-                type="button"
-                onClick={() => handleSelectInitial(initial)}
-                className={[
-                  "min-w-8 rounded-md px-2 py-1 text-xs font-bold",
-                  selectedInitial === initial
-                    ? "bg-sky-600 text-white"
-                    : "bg-slate-100 text-slate-700",
-                ].join(" ")}
-              >
-                {initial}
-              </button>
-            ))}
-          </div>
-        )}
-
-        {selectedInitial && brandsForInitial.length > 0 && (
-          <div className="mt-1.5 flex flex-wrap gap-1">
-            {brandsForInitial.map((brand) => (
-              <button
-                key={brand}
-                type="button"
-                onClick={() => handleSelectBrand(brand)}
-                className={[
-                  "rounded-md px-2.5 py-1 text-xs font-semibold",
-                  selectedBrand === brand
-                    ? "bg-sky-600 text-white"
-                    : "border border-slate-200 bg-white text-slate-700",
-                ].join(" ")}
-              >
-                {brand}
-              </button>
-            ))}
-          </div>
-        )}
-      </div>
-
-      <div className="min-h-0 flex-1 overflow-y-auto px-2 py-2 sm:px-3">
+      <div className="min-h-0 flex-1 overflow-y-auto px-2 py-3 sm:px-4 sm:py-4">
         {error && (
-          <div className="mb-2 rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-800">
+          <div className="mb-3 rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-800">
             {error}
           </div>
         )}
 
         {loading ? (
-          viewMode === "grid" ? (
-            <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 sm:gap-3 lg:grid-cols-4">
-              {Array.from({ length: 9 }).map((_, index) => (
+          <div className="space-y-6">
+            <div className="h-8 w-64 animate-pulse rounded bg-slate-200/80" />
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+              {Array.from({ length: 6 }).map((_, index) => (
                 <div
                   key={index}
-                  className="h-32 animate-pulse rounded-xl bg-slate-200/70"
+                  className="h-48 animate-pulse rounded-2xl bg-slate-200/70"
                 />
               ))}
             </div>
-          ) : (
-            <div className="space-y-2">
-              {Array.from({ length: 8 }).map((_, index) => (
-                <div
-                  key={index}
-                  className="h-14 animate-pulse rounded-xl bg-slate-200/70"
-                />
-              ))}
-            </div>
-          )
-        ) : filtered.length === 0 ? (
+          </div>
+        ) : companyGroups.length === 0 ? (
           <p className="py-16 text-center text-sm text-slate-500">
             표시할 제품이 없습니다
           </p>
-        ) : viewMode === "grid" ? (
-          <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 sm:gap-3 lg:grid-cols-4">
-            {filtered.map((row) => {
-              const soldOut = row.storageQty <= 0;
-              return (
-                <div
-                  key={row.id}
-                  className={[
-                    "relative rounded-xl border p-3 select-none",
-                    soldOut
-                      ? "pointer-events-none border-slate-100 bg-slate-100 opacity-50 grayscale"
-                      : "pointer-events-none border-slate-200 bg-white",
-                  ].join(" ")}
-                  aria-disabled={soldOut}
-                >
-                  {soldOut && (
-                    <span className="absolute top-2 right-2 rounded bg-rose-600 px-1.5 py-0.5 text-[10px] font-bold tracking-wide text-white uppercase">
-                      품절
+        ) : (
+          <div className="space-y-8">
+            {companyGroups.map((company) => (
+              <section key={company.companyType}>
+                <div className="mb-3 flex items-end justify-between gap-3">
+                  <div className="flex min-w-0 items-center gap-2">
+                    <span
+                      className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-sky-100 text-sky-600"
+                      aria-hidden
+                    >
+                      <svg
+                        xmlns="http://www.w3.org/2000/svg"
+                        viewBox="0 0 24 24"
+                        fill="currentColor"
+                        className="h-5 w-5"
+                      >
+                        <path d="M3.375 3C2.339 3 1.5 3.84 1.5 4.875v.75c0 1.036.84 1.875 1.875 1.875h17.25c1.035 0 1.875-.84 1.875-1.875v-.75C22.5 3.839 21.66 3 20.625 3H3.375Z" />
+                        <path
+                          fillRule="evenodd"
+                          d="m3.087 9 .54 9.176A3 3 0 0 0 6.62 21h10.757a3 3 0 0 0 2.995-2.824L20.913 9H3.087Zm6.163 3.75A.75.75 0 0 1 10 12h4a.75.75 0 0 1 0 1.5h-4a.75.75 0 0 1-.75-.75Z"
+                          clipRule="evenodd"
+                        />
+                      </svg>
                     </span>
-                  )}
-                  <p className="pr-10 text-xs font-medium text-slate-400">
-                    {row.brand}
-                  </p>
-                  <p
-                    className={[
-                      "mt-1 line-clamp-2 text-sm font-bold leading-snug sm:text-base",
-                      soldOut ? "text-slate-500" : "text-slate-900",
-                    ].join(" ")}
-                  >
-                    {row.name}
-                  </p>
-                  <p
-                    className={[
-                      "mt-2 text-base font-bold tabular-nums sm:text-lg",
-                      soldOut ? "text-slate-400" : "text-sky-700",
-                    ].join(" ")}
-                  >
-                    {formatPrice(row.price)}원
+                    <h2 className="truncate text-lg font-extrabold text-slate-900 sm:text-xl">
+                      {company.label}
+                    </h2>
+                  </div>
+                  <p className="shrink-0 text-xs text-slate-500 sm:text-sm">
+                    총 {company.totalCount}개 품목 (품절 {company.soldOutCount}
+                    개)
                   </p>
                 </div>
-              );
-            })}
-          </div>
-        ) : (
-          <ul className="space-y-1.5">
-            {filtered.map((row) => {
-              const soldOut = row.storageQty <= 0;
-              return (
-                <li
-                  key={row.id}
-                  className={[
-                    "flex items-center gap-2 rounded-xl border px-3 py-2.5 select-none",
-                    soldOut
-                      ? "pointer-events-none border-slate-100 bg-slate-100 opacity-50 grayscale"
-                      : "pointer-events-none border-slate-200 bg-white",
-                  ].join(" ")}
-                  aria-disabled={soldOut}
-                >
-                  <div className="min-w-0 flex-1">
-                    <p className="truncate text-sm text-slate-900">
-                      <span className="font-medium text-slate-400">
-                        [{row.brand}]
-                      </span>{" "}
-                      <span className="font-semibold">{row.name}</span>
-                    </p>
-                  </div>
-                  <div className="flex shrink-0 items-center gap-2 text-right">
-                    {soldOut && (
-                      <span className="inline-block rounded bg-rose-600 px-1.5 py-0.5 text-[10px] font-bold text-white">
-                        품절
-                      </span>
-                    )}
-                    <p
-                      className={[
-                        "text-sm font-bold tabular-nums",
-                        soldOut ? "text-slate-400" : "text-sky-700",
-                      ].join(" ")}
+
+                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                  {company.brands.map((brandGroup) => (
+                    <article
+                      key={`${company.companyType}-${brandGroup.brand}`}
+                      className="flex flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm"
                     >
-                      {formatPrice(row.price)}원
-                    </p>
-                  </div>
-                </li>
-              );
-            })}
-          </ul>
+                      <div className="flex items-baseline justify-between gap-2 border-b border-slate-100 px-3.5 py-3">
+                        <h3 className="min-w-0 truncate text-base font-bold text-slate-900">
+                          {brandGroup.brand}
+                        </h3>
+                        <span className="shrink-0 text-sm font-semibold text-sky-600">
+                          {brandGroup.totalCount}개
+                        </span>
+                      </div>
+
+                      <ul className="divide-y divide-slate-50 px-2 py-1">
+                        {brandGroup.products.map((row) => {
+                          const soldOut = row.storageQty === 0;
+                          return (
+                            <li
+                              key={row.id}
+                              className="flex items-start gap-2 px-1.5 py-2.5 select-none"
+                            >
+                              <p
+                                className={[
+                                  "min-w-0 flex-1 text-sm leading-snug",
+                                  soldOut
+                                    ? "text-slate-400 line-through"
+                                    : "font-medium text-slate-800",
+                                ].join(" ")}
+                              >
+                                {row.name}
+                              </p>
+                              <ProductStatusBadges row={row} />
+                            </li>
+                          );
+                        })}
+                      </ul>
+                    </article>
+                  ))}
+                </div>
+              </section>
+            ))}
+          </div>
         )}
       </div>
     </div>
