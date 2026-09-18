@@ -40,6 +40,42 @@ create table if not exists movement_logs (
   created_at timestamptz not null default now()
 );
 
+-- 스마트 오더 대기열
+create table if not exists queues (
+  id uuid primary key default gen_random_uuid(),
+  queue_number integer not null,
+  customer_name text not null,
+  status text not null default 'waiting'
+    check (status in ('waiting', 'ordering', 'completed', 'cancelled')),
+  created_at timestamptz not null default now()
+);
+
+create index if not exists queues_queue_number_idx on queues (queue_number desc);
+
+-- 스마트 오더 주문서
+create table if not exists orders (
+  id uuid primary key default gen_random_uuid(),
+  queue_id uuid not null references queues(id) on delete cascade,
+  status text not null default 'pending'
+    check (status in ('pending', 'paid', 'cancelled', 'completed')),
+  created_at timestamptz not null default now()
+);
+
+create index if not exists orders_status_idx on orders (status);
+create index if not exists orders_queue_id_idx on orders (queue_id);
+
+create table if not exists order_items (
+  id uuid primary key default gen_random_uuid(),
+  order_id uuid not null references orders(id) on delete cascade,
+  product_id uuid not null references products(id),
+  quantity integer not null check (quantity > 0),
+  product_name text,
+  created_at timestamptz not null default now()
+);
+
+create index if not exists order_items_order_id_idx on order_items (order_id);
+create index if not exists order_items_product_id_idx on order_items (product_id);
+
 -- Realtime: DELETE/UPDATE 시 old row 전체 필드가 오도록
 alter table inventory replica identity full;
 alter table sales_logs replica identity full;
@@ -47,3 +83,5 @@ alter table sales_logs replica identity full;
 -- Supabase Dashboard > Replication 에서 해당 테이블을 켜거나, 아래를 실행
 -- alter publication supabase_realtime add table inventory;
 -- alter publication supabase_realtime add table sales_logs;
+-- alter publication supabase_realtime add table orders;
+-- alter publication supabase_realtime add table order_items;

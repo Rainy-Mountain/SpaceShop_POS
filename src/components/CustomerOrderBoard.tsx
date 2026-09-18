@@ -1,0 +1,757 @@
+"use client";
+
+import { useEffect, useMemo, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
+import { fetchInventoryDashboardData } from "@/lib/fetchInventory";
+import { getBrandInitialKey, KOREAN_INITIALS } from "@/lib/koreanInitial";
+import {
+  fetchPendingQtyByProduct,
+  getAvailableQty,
+  submitCustomerOrder,
+  type CartItem,
+} from "@/lib/orderActions";
+import { supabase } from "@/lib/supabase";
+import type { DashboardRow } from "@/types/dashboard";
+
+type CompanyFilterValue = "전체" | "자사" | "타사";
+type LiquorFilterValue =
+  | "전체"
+  | "위스키"
+  | "브랜디"
+  | "럼"
+  | "리큐르"
+  | "기타";
+type InitialFilterValue = "전체" | "A-Z" | (typeof KOREAN_INITIALS)[number];
+
+type BrandGroup = {
+  brand: string;
+  products: DashboardRow[];
+  totalCount: number;
+  soldOutCount: number;
+};
+
+type CompanyGroup = {
+  companyType: string;
+  label: string;
+  brands: BrandGroup[];
+  totalCount: number;
+  soldOutCount: number;
+};
+
+const COMPANY_PILLS: Array<{ value: CompanyFilterValue; label: string }> = [
+  { value: "전체", label: "전체 보기" },
+  { value: "자사", label: "스페이스 컴퍼니 코리아" },
+  { value: "타사", label: "타사 제품" },
+];
+
+const LIQUOR_PILLS: Array<{ value: LiquorFilterValue; label: string }> = [
+  { value: "전체", label: "전체 주종" },
+  { value: "위스키", label: "위스키" },
+  { value: "브랜디", label: "브랜디" },
+  { value: "럼", label: "럼" },
+  { value: "리큐르", label: "리큐르" },
+  { value: "기타", label: "기타" },
+];
+
+const INITIAL_PILLS: Array<{ value: InitialFilterValue; label: string }> = [
+  { value: "전체", label: "전체" },
+  ...KOREAN_INITIALS.map((cho) => ({
+    value: cho as InitialFilterValue,
+    label: cho,
+  })),
+  { value: "A-Z", label: "A-Z" },
+];
+
+const KNOWN_LIQUOR_TYPES = new Set<string>([
+  "위스키",
+  "브랜디",
+  "럼",
+  "리큐르",
+  "기타",
+]);
+
+const COMPANY_LABELS: Record<string, string> = {
+  자사: "스페이스 컴퍼니 코리아",
+  타사: "타사 제품",
+};
+
+const COMPANY_ORDER = ["자사", "타사"];
+
+const SCROLL_ROW =
+  "flex flex-nowrap gap-2 overflow-x-auto whitespace-nowrap pb-0.5 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden";
+
+const PENDING_WARN =
+  "앞선 대기자들의 주문으로 인해 품절될 수 있습니다.";
+
+function toNumber(value: unknown): number {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "string") {
+    const parsed = Number(value.replace(/,/g, "").trim());
+    return Number.isFinite(parsed) ? parsed : 0;
+  }
+  return 0;
+}
+
+function matchesLiquorFilter(
+  liquorType: string,
+  filter: LiquorFilterValue
+): boolean {
+  if (filter === "전체") return true;
+  if (filter === "기타") {
+    if (!liquorType) return true;
+    return !KNOWN_LIQUOR_TYPES.has(liquorType) || liquorType === "기타";
+  }
+  return liquorType === filter;
+}
+
+function matchesInitialKey(
+  brand: string,
+  initial: InitialFilterValue
+): boolean {
+  if (initial === "전체") return true;
+  const key = getBrandInitialKey(brand);
+  if (!key) return false;
+  if (initial === "A-Z") return /^[A-Z]$/.test(key);
+  return key === initial;
+}
+
+function companyLabel(companyType: string): string {
+  return COMPANY_LABELS[companyType] ?? companyType;
+}
+
+function groupFilteredProducts(rows: DashboardRow[]): CompanyGroup[] {
+  const byCompany = new Map<string, Map<string, DashboardRow[]>>();
+
+  for (const row of rows) {
+    const companyKey = row.companyType || "기타";
+    const brandKey = row.brand || "미지정";
+    if (!byCompany.has(companyKey)) byCompany.set(companyKey, new Map());
+    const brandMap = byCompany.get(companyKey)!;
+    if (!brandMap.has(brandKey)) brandMap.set(brandKey, []);
+    brandMap.get(brandKey)!.push(row);
+  }
+
+  const companyKeys = [
+    ...COMPANY_ORDER.filter((key) => byCompany.has(key)),
+    ...[...byCompany.keys()]
+      .filter((key) => !COMPANY_ORDER.includes(key))
+      .sort((a, b) => a.localeCompare(b, "ko")),
+  ];
+
+  return companyKeys.map((companyType) => {
+    const brandMap = byCompany.get(companyType)!;
+    const brandNames = [...brandMap.keys()].sort((a, b) =>
+      a.localeCompare(b, "ko")
+    );
+    const brands: BrandGroup[] = brandNames.map((brand) => {
+      const products = brandMap.get(brand)!;
+      return {
+        brand,
+        products,
+        totalCount: products.length,
+        soldOutCount: products.filter((p) => p.storageQty === 0).length,
+      };
+    });
+    return {
+      companyType,
+      label: companyLabel(companyType),
+      brands,
+      totalCount: brands.reduce((s, b) => s + b.totalCount, 0),
+      soldOutCount: brands.reduce((s, b) => s + b.soldOutCount, 0),
+    };
+  });
+}
+
+function PillButton({
+  label,
+  active,
+  onClick,
+  size = "default",
+}: {
+  label: string;
+  active: boolean;
+  onClick: () => void;
+  size?: "default" | "tiny";
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={[
+        "shrink-0 rounded-full font-medium whitespace-nowrap transition",
+        size === "tiny" ? "min-w-10 px-3 py-2 text-sm" : "px-3 py-2 text-sm",
+        active
+          ? "bg-gray-900 text-white"
+          : "bg-gray-50 text-gray-400 hover:bg-gray-100 hover:text-gray-600",
+      ].join(" ")}
+    >
+      {label}
+    </button>
+  );
+}
+
+export default function CustomerOrderBoard() {
+  const router = useRouter();
+  const searchParams = useSearchParams();
+  const queueId = searchParams.get("queue_id");
+
+  const [products, setProducts] = useState<DashboardRow[]>([]);
+  const [pendingByProduct, setPendingByProduct] = useState<Map<string, number>>(
+    () => new Map()
+  );
+  const [cart, setCart] = useState<CartItem[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [submitting, setSubmitting] = useState(false);
+  const [submitted, setSubmitted] = useState(false);
+  const [addingId, setAddingId] = useState<string | null>(null);
+
+  const [companyFilter, setCompanyFilter] =
+    useState<CompanyFilterValue>("전체");
+  const [liquorFilter, setLiquorFilter] = useState<LiquorFilterValue>("전체");
+  const [searchTerm, setSearchTerm] = useState("");
+  const [initialFilter, setInitialFilter] =
+    useState<InitialFilterValue>("전체");
+  const [brandFilter, setBrandFilter] = useState<string | null>(null);
+  const [brandSearchOpen, setBrandSearchOpen] = useState(false);
+
+  useEffect(() => {
+    if (!queueId) {
+      router.replace("/");
+    }
+  }, [queueId, router]);
+
+  useEffect(() => {
+    if (typeof window === "undefined" || !queueId) return;
+
+    let cancelled = false;
+
+    async function load() {
+      setLoading(true);
+      setError(null);
+      try {
+        const [data, pending] = await Promise.all([
+          fetchInventoryDashboardData(undefined, { orderBy: "created" }),
+          fetchPendingQtyByProduct(),
+        ]);
+        if (cancelled) return;
+        setProducts(data.rows);
+        setPendingByProduct(pending);
+      } catch (err) {
+        const message =
+          err instanceof Error
+            ? err.message
+            : "제품 목록을 불러오지 못했습니다.";
+        console.error(err);
+        if (!cancelled) setError(message);
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    }
+
+    void load();
+    return () => {
+      cancelled = true;
+    };
+  }, [queueId]);
+
+  useEffect(() => {
+    if (typeof window === "undefined" || !queueId || submitted) return;
+
+    let timer: number | null = null;
+
+    const channel = supabase
+      .channel("realtime:order-inventory")
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "inventory" },
+        (payload) => {
+          const next = (payload.new ?? {}) as {
+            product_id?: string;
+            storage_qty?: number | string | null;
+            backup_qty?: number | string | null;
+          };
+          const productId = String(next.product_id ?? "");
+          if (!productId) {
+            if (timer != null) window.clearTimeout(timer);
+            timer = window.setTimeout(() => {
+              void Promise.all([
+                fetchInventoryDashboardData(undefined, { orderBy: "created" }),
+                fetchPendingQtyByProduct(),
+              ])
+                .then(([data, pending]) => {
+                  setProducts(data.rows);
+                  setPendingByProduct(pending);
+                })
+                .catch(console.error);
+            }, 120);
+            return;
+          }
+          const storageQty = toNumber(next.storage_qty);
+          const backupQty = toNumber(next.backup_qty);
+          setProducts((prev) =>
+            prev.map((row) =>
+              row.id === productId
+                ? {
+                    ...row,
+                    storageQty,
+                    backupQty,
+                    totalQty: storageQty + backupQty,
+                  }
+                : row
+            )
+          );
+        }
+      )
+      .subscribe();
+
+    return () => {
+      if (timer != null) window.clearTimeout(timer);
+      void supabase.removeChannel(channel);
+    };
+  }, [queueId, submitted]);
+
+  const brandsForInitial = useMemo(() => {
+    const seen = new Set<string>();
+    const brands: string[] = [];
+    for (const row of products) {
+      if (!matchesInitialKey(row.brand, initialFilter)) continue;
+      if (seen.has(row.brand)) continue;
+      seen.add(row.brand);
+      brands.push(row.brand);
+    }
+    return brands.sort((a, b) => a.localeCompare(b, "ko"));
+  }, [products, initialFilter]);
+
+  useEffect(() => {
+    if (brandFilter && !brandsForInitial.includes(brandFilter)) {
+      setBrandFilter(null);
+    }
+  }, [brandsForInitial, brandFilter]);
+
+  const filteredProducts = useMemo(() => {
+    const keyword = searchTerm.trim().toLowerCase();
+    return products.filter((row) => {
+      if (companyFilter !== "전체" && row.companyType !== companyFilter) {
+        return false;
+      }
+      if (!matchesLiquorFilter(row.liquorType, liquorFilter)) return false;
+      if (brandFilter && row.brand !== brandFilter) return false;
+      if (initialFilter !== "전체" && !brandFilter) {
+        if (!matchesInitialKey(row.brand, initialFilter)) return false;
+      }
+      if (keyword) {
+        const inName = row.name.toLowerCase().includes(keyword);
+        const inBrand = row.brand.toLowerCase().includes(keyword);
+        if (!inName && !inBrand) return false;
+      }
+      return true;
+    });
+  }, [
+    products,
+    companyFilter,
+    liquorFilter,
+    searchTerm,
+    brandFilter,
+    initialFilter,
+  ]);
+
+  const companyGroups = useMemo(
+    () => groupFilteredProducts(filteredProducts),
+    [filteredProducts]
+  );
+
+  const cartItemCount = useMemo(
+    () => cart.reduce((sum, item) => sum + item.qty, 0),
+    [cart]
+  );
+
+  const cartLineCount = cart.length;
+
+  async function handleAddToCart(row: DashboardRow) {
+    if (submitted || row.storageQty === 0) return;
+
+    setAddingId(row.id);
+    try {
+      let pendingMap = pendingByProduct;
+      try {
+        pendingMap = await fetchPendingQtyByProduct();
+        setPendingByProduct(pendingMap);
+      } catch (err) {
+        console.error(err);
+      }
+
+      const cartQty = cart.find((item) => item.productId === row.id)?.qty ?? 0;
+      const pendingQty = pendingMap.get(row.id) ?? 0;
+      const available = getAvailableQty({
+        storageQty: row.storageQty,
+        pendingQty,
+        cartQty,
+      });
+
+      if (available < 1) {
+        window.alert(PENDING_WARN);
+        return;
+      }
+
+      setCart((prev) => {
+        const existing = prev.find((item) => item.productId === row.id);
+        if (existing) {
+          return prev.map((item) =>
+            item.productId === row.id ? { ...item, qty: item.qty + 1 } : item
+          );
+        }
+        return [
+          ...prev,
+          {
+            productId: row.id,
+            name: row.name,
+            brand: row.brand,
+            qty: 1,
+          },
+        ];
+      });
+    } finally {
+      setAddingId(null);
+    }
+  }
+
+  async function handleSubmitOrder() {
+    if (!queueId || cart.length === 0 || submitting || submitted) return;
+
+    setSubmitting(true);
+    try {
+      // 제출 직전 전체 재검증
+      const pendingMap = await fetchPendingQtyByProduct();
+      setPendingByProduct(pendingMap);
+
+      for (const item of cart) {
+        const product = products.find((p) => p.id === item.productId);
+        const storageQty = product?.storageQty ?? 0;
+        const pendingQty = pendingMap.get(item.productId) ?? 0;
+        const available = getAvailableQty({
+          storageQty,
+          pendingQty,
+          cartQty: 0,
+        });
+        if (item.qty > available) {
+          window.alert(
+            `"${item.name}" — ${PENDING_WARN}`
+          );
+          setSubmitting(false);
+          return;
+        }
+      }
+
+      await submitCustomerOrder({ queueId, items: cart });
+      window.alert(
+        "주문서가 포스기로 전송되었습니다! 카운터로 와주세요."
+      );
+      setSubmitted(true);
+      setCart([]);
+    } catch (err) {
+      const message =
+        err instanceof Error ? err.message : "주문서 제출에 실패했습니다.";
+      console.error(err);
+      window.alert(message);
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  if (!queueId) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-gray-50 text-sm text-gray-500">
+        이동 중…
+      </div>
+    );
+  }
+
+  if (submitted) {
+    return (
+      <main className="flex min-h-screen flex-col items-center justify-center bg-gray-50 px-4">
+        <div className="w-full max-w-md rounded-2xl border border-gray-200 bg-white p-8 text-center shadow-sm">
+          <p className="text-xs font-semibold tracking-wide text-sky-600">
+            SpaceShop Smart Order
+          </p>
+          <h1 className="mt-3 text-2xl font-extrabold text-gray-900">
+            결제 대기 중
+          </h1>
+          <p className="mt-3 text-sm leading-relaxed text-gray-500">
+            주문서가 포스기로 전송되었습니다.
+            <br />
+            카운터로 와 주세요.
+          </p>
+          <p className="mt-6 text-xs text-gray-400">
+            추가 수정은 할 수 없습니다.
+          </p>
+        </div>
+      </main>
+    );
+  }
+
+  return (
+    <main className="flex min-h-screen w-full flex-col bg-gray-50 pb-24">
+      <header className="sticky top-0 z-20 border-b border-gray-200 bg-white px-3 pb-2.5 pt-3 sm:px-4">
+        <div className="text-center">
+          <h1 className="text-lg font-extrabold leading-tight tracking-tight text-gray-900 whitespace-pre-line sm:text-xl">
+            {"스페이스 샵 4주년\n스마트 오더"}
+          </h1>
+          <p className="mt-1.5 text-xs text-gray-500">
+            원하는 제품을 담고 주문서를 제출해 주세요.
+          </p>
+        </div>
+
+        <div className="relative mx-auto mt-3 max-w-xl">
+          <span
+            className="pointer-events-none absolute top-1/2 left-3 -translate-y-1/2 text-gray-400"
+            aria-hidden
+          >
+            <svg
+              xmlns="http://www.w3.org/2000/svg"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              className="h-3.5 w-3.5"
+            >
+              <circle cx="11" cy="11" r="7" />
+              <path d="m20 20-3.5-3.5" strokeLinecap="round" />
+            </svg>
+          </span>
+          <input
+            type="text"
+            value={searchTerm}
+            onChange={(event) => setSearchTerm(event.target.value)}
+            placeholder="제품명 또는 브랜드명 검색"
+            className="w-full rounded-full border border-gray-200 bg-white py-1.5 pr-9 pl-9 text-sm text-gray-900 outline-none placeholder:text-gray-400 focus:border-gray-900"
+          />
+        </div>
+
+        <div className="mt-2.5 space-y-2">
+          <div className={SCROLL_ROW}>
+            {COMPANY_PILLS.map((pill) => (
+              <PillButton
+                key={pill.value}
+                label={pill.label}
+                active={companyFilter === pill.value}
+                onClick={() => setCompanyFilter(pill.value)}
+              />
+            ))}
+          </div>
+          <div className={SCROLL_ROW}>
+            {LIQUOR_PILLS.map((pill) => (
+              <PillButton
+                key={pill.value}
+                label={pill.label}
+                active={liquorFilter === pill.value}
+                onClick={() => setLiquorFilter(pill.value)}
+              />
+            ))}
+          </div>
+          <button
+            type="button"
+            onClick={() => setBrandSearchOpen((prev) => !prev)}
+            className={[
+              "flex w-full items-center justify-center gap-1 rounded-xl py-2.5 text-sm font-medium transition",
+              brandSearchOpen || initialFilter !== "전체" || brandFilter
+                ? "bg-gray-900 text-white"
+                : "bg-gray-50 text-gray-500 hover:bg-gray-100",
+            ].join(" ")}
+          >
+            브랜드 상세 검색 {brandSearchOpen ? "▴" : "▾"}
+          </button>
+          {brandSearchOpen && (
+            <div className="space-y-2 border-t border-gray-100 pt-2">
+              <div className={SCROLL_ROW}>
+                {INITIAL_PILLS.map((pill) => (
+                  <PillButton
+                    key={pill.value}
+                    label={pill.label}
+                    active={initialFilter === pill.value}
+                    onClick={() => {
+                      setInitialFilter(pill.value);
+                      setBrandFilter(null);
+                    }}
+                    size="tiny"
+                  />
+                ))}
+              </div>
+              {initialFilter !== "전체" && brandsForInitial.length > 0 && (
+                <div className={SCROLL_ROW}>
+                  {brandsForInitial.map((brand) => (
+                    <PillButton
+                      key={brand}
+                      label={brand}
+                      active={brandFilter === brand}
+                      onClick={() =>
+                        setBrandFilter((prev) =>
+                          prev === brand ? null : brand
+                        )
+                      }
+                    />
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      </header>
+
+      <div className="min-h-0 flex-1 overflow-y-auto px-2 py-4 sm:px-4">
+        {error && (
+          <div className="mb-3 rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">
+            {error}
+          </div>
+        )}
+
+        {loading ? (
+          <div className="columns-1 gap-4 md:columns-2 xl:columns-3">
+            {Array.from({ length: 6 }).map((_, index) => (
+              <div
+                key={index}
+                className="mb-4 break-inside-avoid"
+                style={{ height: `${140 + (index % 3) * 48}px` }}
+              >
+                <div className="h-full animate-pulse rounded-xl border border-gray-200 bg-white shadow-sm" />
+              </div>
+            ))}
+          </div>
+        ) : companyGroups.length === 0 ? (
+          <p className="py-16 text-center text-sm text-gray-500">
+            표시할 제품이 없습니다
+          </p>
+        ) : (
+          <div className="space-y-8">
+            {companyGroups.map((company) => (
+              <section key={company.companyType}>
+                <div className="mb-4 flex items-end justify-between gap-3">
+                  <h2 className="truncate text-lg font-extrabold text-gray-900 sm:text-xl">
+                    {company.label}
+                  </h2>
+                  <p className="shrink-0 text-xs text-gray-500">
+                    총 {company.totalCount}개 품목 (품절 {company.soldOutCount}
+                    개)
+                  </p>
+                </div>
+
+                <div className="columns-1 gap-4 md:columns-2 xl:columns-3">
+                  {company.brands.map((brandGroup) => (
+                    <article
+                      key={`${company.companyType}-${brandGroup.brand}`}
+                      className="mb-4 break-inside-avoid overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm"
+                    >
+                      <div className="flex items-baseline justify-between gap-2 border-b border-gray-100 px-3.5 py-3">
+                        <h3 className="min-w-0 truncate text-base font-bold text-gray-900">
+                          {brandGroup.brand}
+                        </h3>
+                        <span className="shrink-0 text-sm font-semibold text-sky-600">
+                          {brandGroup.totalCount}개
+                        </span>
+                      </div>
+
+                      <ul className="divide-y divide-gray-100 px-2 py-1">
+                        {brandGroup.products.map((row) => {
+                          const soldOut = row.storageQty === 0;
+                          const inCart =
+                            cart.find((c) => c.productId === row.id)?.qty ?? 0;
+                          const lowStock =
+                            row.storageQty > 0 && row.storageQty <= 2;
+
+                          return (
+                            <li
+                              key={row.id}
+                              className="flex flex-col gap-2 px-1.5 py-2.5"
+                            >
+                              <div className="flex items-center gap-2">
+                                <p
+                                  className={[
+                                    "min-w-0 flex-1 truncate text-sm leading-snug",
+                                    soldOut
+                                      ? "text-gray-400 line-through"
+                                      : "font-medium text-gray-800",
+                                  ].join(" ")}
+                                >
+                                  {row.name}
+                                </p>
+                                <div className="flex shrink-0 flex-wrap items-center justify-end gap-1">
+                                  {soldOut && (
+                                    <span className="rounded-full bg-gray-200 px-2 py-0.5 text-[10px] font-semibold text-gray-600">
+                                      품절
+                                    </span>
+                                  )}
+                                  {lowStock && (
+                                    <span className="rounded-full bg-orange-100 px-2 py-0.5 text-[10px] font-semibold text-orange-700">
+                                      품절 임박
+                                    </span>
+                                  )}
+                                  {row.liquorType ? (
+                                    <span className="rounded-full bg-sky-50 px-2 py-0.5 text-[10px] font-semibold text-sky-700">
+                                      {row.liquorType}
+                                    </span>
+                                  ) : null}
+                                </div>
+                              </div>
+
+                              <div className="flex items-center justify-end gap-2">
+                                {inCart > 0 && (
+                                  <span className="text-xs font-medium text-sky-600">
+                                    담김 {inCart}
+                                  </span>
+                                )}
+                                <button
+                                  type="button"
+                                  disabled={
+                                    soldOut ||
+                                    addingId === row.id ||
+                                    submitting
+                                  }
+                                  onClick={() => void handleAddToCart(row)}
+                                  className="rounded-lg bg-gray-900 px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-gray-800 disabled:cursor-not-allowed disabled:bg-gray-200 disabled:text-gray-400"
+                                >
+                                  {soldOut
+                                    ? "품절"
+                                    : addingId === row.id
+                                      ? "확인 중…"
+                                      : "담기"}
+                                </button>
+                              </div>
+                            </li>
+                          );
+                        })}
+                      </ul>
+                    </article>
+                  ))}
+                </div>
+              </section>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* 하단 장바구니 바 */}
+      <div className="fixed right-0 bottom-0 left-0 z-30 border-t border-gray-200 bg-white px-4 py-3 shadow-[0_-4px_12px_rgba(0,0,0,0.06)]">
+        <div className="mx-auto flex max-w-3xl items-center gap-3">
+          <p className="min-w-0 flex-1 text-sm font-medium text-gray-700">
+            {cartLineCount === 0
+              ? "장바구니가 비어 있습니다"
+              : `${cartLineCount}개 품목 담김`}
+            {cartItemCount > 0 && (
+              <span className="ml-1 text-gray-400">
+                (총 {cartItemCount}병)
+              </span>
+            )}
+          </p>
+          <button
+            type="button"
+            disabled={cart.length === 0 || submitting}
+            onClick={() => void handleSubmitOrder()}
+            className="shrink-0 rounded-xl bg-sky-600 px-4 py-3 text-sm font-bold text-white transition hover:bg-sky-500 disabled:cursor-not-allowed disabled:bg-gray-300"
+          >
+            {submitting ? "제출 중…" : "주문서 제출하기"}
+          </button>
+        </div>
+      </div>
+    </main>
+  );
+}

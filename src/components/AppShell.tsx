@@ -4,8 +4,14 @@ import { usePathname } from "next/navigation";
 import type { ReactNode } from "react";
 import AppNav from "@/components/AppNav";
 
-/** iframe 고객용 경로 — 관리자 네비 숨김 */
-const PUBLIC_PREFIXES = ["/public-menu", "/customer"];
+/** iframe·손님용·스마트오더 경로 — 관리자 네비 숨김 */
+const PUBLIC_PREFIXES = [
+  "/public-menu",
+  "/customer",
+  "/staff/qr",
+  "/queue",
+  "/order",
+];
 
 export default function AppShell({ children }: { children: ReactNode }) {
   const pathname = usePathname() || "";
