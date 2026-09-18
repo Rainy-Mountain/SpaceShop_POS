@@ -10,6 +10,7 @@ import {
   submitCustomerOrder,
   type CartItem,
 } from "@/lib/orderActions";
+import { subscribeOrdersRealtime } from "@/lib/realtimeOrders";
 import { supabase } from "@/lib/supabase";
 import type { DashboardRow } from "@/types/dashboard";
 
@@ -206,7 +207,7 @@ export default function CustomerOrderBoard() {
   const [submitted, setSubmitted] = useState(false);
   const [submittedOrderId, setSubmittedOrderId] = useState<string | null>(null);
   const [receiptItems, setReceiptItems] = useState<CartItem[]>([]);
-  const [paymentDone, setPaymentDone] = useState(false);
+  const [isPaid, setIsPaid] = useState(false);
   const [addingId, setAddingId] = useState<string | null>(null);
 
   const [companyFilter, setCompanyFilter] =
@@ -471,44 +472,68 @@ export default function CustomerOrderBoard() {
     }
   }
 
-  // 결제 대기 중 — 본인 주문 paid 감지
+  // 결제 대기 중 — 본인 주문 paid 실시간 감지
   useEffect(() => {
     if (typeof window === "undefined") return;
-    if (!submitted || !submittedOrderId || paymentDone) return;
+    if (!submitted || !submittedOrderId || isPaid) return;
 
-    const channel = supabase
-      .channel(`realtime:order-paid:${submittedOrderId}`)
-      .on(
-        "postgres_changes",
-        {
-          event: "UPDATE",
-          schema: "public",
-          table: "orders",
-          filter: `id=eq.${submittedOrderId}`,
-        },
-        (payload) => {
-          const next = (payload.new ?? {}) as { status?: string };
-          if (next.status === "paid") {
-            setPaymentDone(true);
-          }
+    let disposed = false;
+    let pollTimer: number | null = null;
+
+    const markPaidIfNeeded = (status?: string | null) => {
+      if (disposed) return;
+      if (status === "paid") setIsPaid(true);
+    };
+
+    async function checkPaidOnce() {
+      try {
+        const { data, error } = await supabase
+          .from("orders")
+          .select("status")
+          .eq("id", submittedOrderId)
+          .maybeSingle();
+        if (error) {
+          console.error("[CustomerOrderBoard] paid 폴링 실패", error);
+          return;
         }
-      )
-      .subscribe();
+        markPaidIfNeeded(data?.status ?? null);
+      } catch (err) {
+        console.error("[CustomerOrderBoard] paid 폴링 예외", err);
+      }
+    }
 
-    // 이미 paid인지 한 번 확인 (놓친 경우)
-    void supabase
-      .from("orders")
-      .select("status")
-      .eq("id", submittedOrderId)
-      .maybeSingle()
-      .then(({ data }) => {
-        if (data?.status === "paid") setPaymentDone(true);
-      });
+    const unsubscribe = subscribeOrdersRealtime({
+      channelPrefix: `order-paid:${submittedOrderId}`,
+      orderIdFilter: submittedOrderId,
+      onChange: (payload) => {
+        const next = (payload.new ?? {}) as {
+          id?: string;
+          status?: string;
+        };
+        console.info("[CustomerOrderBoard] orders UPDATE", next);
+        if (
+          String(next.id ?? submittedOrderId) === submittedOrderId &&
+          next.status === "paid"
+        ) {
+          setIsPaid(true);
+        }
+      },
+    });
+
+    // 이미 paid인지 즉시 1회 확인 (이벤트 놓친 경우)
+    void checkPaidOnce();
+
+    // Realtime 미설정/지연 대비 폴링 백업 (결제 완료 시 effect cleanup으로 중단)
+    pollTimer = window.setInterval(() => {
+      void checkPaidOnce();
+    }, 2500);
 
     return () => {
-      void supabase.removeChannel(channel);
+      disposed = true;
+      if (pollTimer != null) window.clearInterval(pollTimer);
+      unsubscribe();
     };
-  }, [submitted, submittedOrderId, paymentDone]);
+  }, [submitted, submittedOrderId, isPaid]);
 
   if (!queueId) {
     return (
@@ -518,7 +543,7 @@ export default function CustomerOrderBoard() {
     );
   }
 
-  if (submitted && paymentDone) {
+  if (submitted && isPaid) {
     return (
       <main className="flex min-h-screen flex-col items-center justify-center bg-gray-50 px-4 py-10">
         <div className="w-full max-w-md rounded-2xl border border-gray-200 bg-white p-6 shadow-sm sm:p-8">

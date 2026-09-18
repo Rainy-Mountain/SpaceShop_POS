@@ -82,13 +82,34 @@ create table if not exists order_items (
 create index if not exists order_items_order_id_idx on order_items (order_id);
 create index if not exists order_items_product_id_idx on order_items (product_id);
 
--- Realtime: DELETE/UPDATE 시 old row 전체 필드가 오도록
+-- Realtime: DELETE/UPDATE 시 old row 전체 필드 + 필터(id=eq.…)가 동작하도록
 alter table inventory replica identity full;
 alter table sales_logs replica identity full;
+alter table orders replica identity full;
+alter table order_items replica identity full;
+alter table queues replica identity full;
 
--- Supabase Dashboard > Replication 에서 해당 테이블을 켜거나, 아래를 실행
--- alter publication supabase_realtime add table inventory;
--- alter publication supabase_realtime add table sales_logs;
--- alter publication supabase_realtime add table orders;
--- alter publication supabase_realtime add table order_items;
--- alter publication supabase_realtime add table queues;
+-- Publications (이미 있으면 무시)
+do $$
+begin
+  begin
+    alter publication supabase_realtime add table inventory;
+  exception when duplicate_object then null;
+  end;
+  begin
+    alter publication supabase_realtime add table sales_logs;
+  exception when duplicate_object then null;
+  end;
+  begin
+    alter publication supabase_realtime add table orders;
+  exception when duplicate_object then null;
+  end;
+  begin
+    alter publication supabase_realtime add table order_items;
+  exception when duplicate_object then null;
+  end;
+  begin
+    alter publication supabase_realtime add table queues;
+  exception when duplicate_object then null;
+  end;
+end $$;

@@ -18,6 +18,7 @@ import {
   SMART_ORDER_TRUNCATE_HINT,
   type PendingPosOrder,
 } from "@/lib/orderActions";
+import { subscribeOrdersRealtime } from "@/lib/realtimeOrders";
 import { supabase } from "@/lib/supabase";
 import type { CompanyFilter, DashboardRow } from "@/types/dashboard";
 
@@ -397,36 +398,47 @@ export default function KioskBoard() {
   useEffect(() => {
     if (typeof window === "undefined") return;
 
-    let timer: number | null = null;
+    let debounceTimer: number | null = null;
+    let pollTimer: number | null = null;
+    let disposed = false;
 
     async function refreshPendingOrders() {
       try {
         const pending = await fetchPendingPosOrders();
-        setPendingOrders(pending);
+        if (!disposed) setPendingOrders(pending);
       } catch (err) {
         console.error("[KioskBoard] pending 대기열 목록 실패", err);
       }
     }
 
+    const scheduleRefresh = () => {
+      if (debounceTimer != null) window.clearTimeout(debounceTimer);
+      // order INSERT 직후 order_items INSERT가 이어지므로 짧게 디바운스
+      debounceTimer = window.setTimeout(() => {
+        void refreshPendingOrders();
+      }, 220);
+    };
+
     void refreshPendingOrders();
 
-    const channel = supabase
-      .channel("realtime:kiosk-smart-orders")
-      .on(
-        "postgres_changes",
-        { event: "*", schema: "public", table: "orders" },
-        () => {
-          if (timer != null) window.clearTimeout(timer);
-          timer = window.setTimeout(() => {
-            void refreshPendingOrders();
-          }, 120);
-        }
-      )
-      .subscribe();
+    const unsubscribe = subscribeOrdersRealtime({
+      channelPrefix: "kiosk-orders",
+      includeOrderItems: true,
+      onChange: () => {
+        scheduleRefresh();
+      },
+    });
+
+    // Realtime 미설정/지연 대비 가벼운 폴링 백업
+    pollTimer = window.setInterval(() => {
+      void refreshPendingOrders();
+    }, 8000);
 
     return () => {
-      if (timer != null) window.clearTimeout(timer);
-      void supabase.removeChannel(channel);
+      disposed = true;
+      if (debounceTimer != null) window.clearTimeout(debounceTimer);
+      if (pollTimer != null) window.clearInterval(pollTimer);
+      unsubscribe();
     };
   }, []);
 

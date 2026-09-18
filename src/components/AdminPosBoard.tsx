@@ -7,7 +7,7 @@ import {
   fetchPendingPosOrders,
   type PendingPosOrder,
 } from "@/lib/orderActions";
-import { supabase } from "@/lib/supabase";
+import { subscribeOrdersRealtime } from "@/lib/realtimeOrders";
 
 /**
  * 매니저용 POS — pending 주문 Realtime + 결제 완료(매출 기록·재고 차감)
@@ -47,32 +47,34 @@ export default function AdminPosBoard() {
   useEffect(() => {
     if (typeof window === "undefined") return;
 
-    let timer: number | null = null;
+    let debounceTimer: number | null = null;
+    let pollTimer: number | null = null;
+    let disposed = false;
 
     const scheduleReload = () => {
-      if (timer != null) window.clearTimeout(timer);
-      timer = window.setTimeout(() => {
-        void loadOrders({ silent: true });
-      }, 100);
+      if (debounceTimer != null) window.clearTimeout(debounceTimer);
+      debounceTimer = window.setTimeout(() => {
+        if (!disposed) void loadOrders({ silent: true });
+      }, 220);
     };
 
-    const channel = supabase
-      .channel("realtime:admin-pos-orders")
-      .on(
-        "postgres_changes",
-        { event: "*", schema: "public", table: "orders" },
-        scheduleReload
-      )
-      .on(
-        "postgres_changes",
-        { event: "*", schema: "public", table: "order_items" },
-        scheduleReload
-      )
-      .subscribe();
+    const unsubscribe = subscribeOrdersRealtime({
+      channelPrefix: "admin-pos-orders",
+      includeOrderItems: true,
+      onChange: () => {
+        scheduleReload();
+      },
+    });
+
+    pollTimer = window.setInterval(() => {
+      if (!disposed) void loadOrders({ silent: true });
+    }, 8000);
 
     return () => {
-      if (timer != null) window.clearTimeout(timer);
-      void supabase.removeChannel(channel);
+      disposed = true;
+      if (debounceTimer != null) window.clearTimeout(debounceTimer);
+      if (pollTimer != null) window.clearInterval(pollTimer);
+      unsubscribe();
     };
   }, [loadOrders]);
 
