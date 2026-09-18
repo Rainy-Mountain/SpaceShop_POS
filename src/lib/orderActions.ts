@@ -60,16 +60,46 @@ export async function submitCustomerOrder(options: {
   if (!queueId) throw new Error("대기열 정보가 없습니다.");
   if (items.length === 0) throw new Error("장바구니가 비어 있습니다.");
 
+  // 1) queues에서 손님 정보 조회 (orders NOT NULL 컬럼용)
+  const { data: queue, error: queueError } = await supabase
+    .from("queues")
+    .select("customer_name, queue_number")
+    .eq("id", queueId)
+    .maybeSingle();
+
+  if (queueError) {
+    console.error("[submitCustomerOrder] queues select 실패", queueError);
+    throw queueError;
+  }
+  if (!queue) {
+    throw new Error("대기열을 찾을 수 없습니다. QR로 다시 입장해 주세요.");
+  }
+
+  const customerName = String(queue.customer_name ?? "").trim();
+  const queueNumber = Number(queue.queue_number);
+  if (!customerName) {
+    throw new Error("손님 성함 정보가 없습니다.");
+  }
+  if (!Number.isFinite(queueNumber)) {
+    throw new Error("순번 정보가 올바르지 않습니다.");
+  }
+
+  // 2) orders INSERT (queue_id + customer_name + queue_number)
   const { data: order, error: orderError } = await supabase
     .from("orders")
     .insert({
       queue_id: queueId,
+      customer_name: customerName,
+      queue_number: queueNumber,
       status: "pending",
     })
     .select("id")
     .single();
 
-  if (orderError) throw orderError;
+  if (orderError) {
+    console.error("[submitCustomerOrder] orders insert 실패", orderError);
+    throw orderError;
+  }
   if (!order?.id) throw new Error("주문서 생성에 실패했습니다.");
 
   const payload = items.map((item) => ({
@@ -84,7 +114,7 @@ export async function submitCustomerOrder(options: {
     .insert(payload);
 
   if (itemsError) {
-    // 롤백 시도
+    console.error("[submitCustomerOrder] order_items insert 실패", itemsError);
     await supabase.from("orders").delete().eq("id", order.id);
     throw itemsError;
   }
@@ -127,6 +157,8 @@ export async function fetchPendingPosOrders(): Promise<PendingPosOrder[]> {
       id,
       queue_id,
       created_at,
+      customer_name,
+      queue_number,
       queues ( queue_number, customer_name ),
       order_items ( id, product_id, quantity, product_name )
     `
@@ -138,11 +170,17 @@ export async function fetchPendingPosOrders(): Promise<PendingPosOrder[]> {
   const rows: PendingPosOrder[] = (data ?? []).map((row) => {
     const queue = normalizeQueueRelation(row.queues);
     const itemsRaw = Array.isArray(row.order_items) ? row.order_items : [];
+    const queueNumber =
+      Number(row.queue_number) || Number(queue?.queue_number) || 0;
+    const customerName =
+      String(row.customer_name ?? "").trim() ||
+      String(queue?.customer_name ?? "손님");
+
     return {
       id: String(row.id),
       queueId: String(row.queue_id),
-      queueNumber: Number(queue?.queue_number) || 0,
-      customerName: String(queue?.customer_name ?? "손님"),
+      queueNumber,
+      customerName,
       createdAt: String(row.created_at ?? ""),
       items: itemsRaw.map((item) => ({
         id: String(item.id),

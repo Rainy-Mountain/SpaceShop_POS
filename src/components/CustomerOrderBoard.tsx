@@ -450,10 +450,17 @@ export default function CustomerOrderBoard() {
       setSubmitted(true);
       setCart([]);
     } catch (err) {
+      console.error("[handleSubmitOrder] 제출 실패", err);
       const message =
-        err instanceof Error ? err.message : "주문서 제출에 실패했습니다.";
-      console.error(err);
-      window.alert(message);
+        err instanceof Error
+          ? err.message
+          : typeof err === "object" &&
+              err !== null &&
+              "message" in err &&
+              typeof (err as { message: unknown }).message === "string"
+            ? (err as { message: string }).message
+            : "알 수 없는 오류";
+      window.alert(`제출 실패: ${message}`);
     } finally {
       setSubmitting(false);
     }

@@ -56,10 +56,16 @@ create index if not exists queues_queue_number_idx on queues (queue_number desc)
 create table if not exists orders (
   id uuid primary key default gen_random_uuid(),
   queue_id uuid not null references queues(id) on delete cascade,
+  customer_name text not null,
+  queue_number integer not null,
   status text not null default 'pending'
     check (status in ('pending', 'paid', 'cancelled', 'completed')),
   created_at timestamptz not null default now()
 );
+
+-- 기존 orders에 컬럼이 없다면 실행
+-- alter table orders add column if not exists customer_name text;
+-- alter table orders add column if not exists queue_number integer;
 
 create index if not exists orders_status_idx on orders (status);
 create index if not exists orders_queue_id_idx on orders (queue_id);
