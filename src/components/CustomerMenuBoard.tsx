@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { fetchInventoryDashboardData } from "@/lib/fetchInventory";
+import { getBrandInitialKey, KOREAN_INITIALS } from "@/lib/koreanInitial";
 import { supabase } from "@/lib/supabase";
 import type { DashboardRow } from "@/types/dashboard";
 
@@ -14,6 +15,9 @@ type LiquorFilterValue =
   | "럼"
   | "리큐르"
   | "기타";
+
+/** 초성 필터: 전체 | ㄱ~ㅎ | A-Z */
+type InitialFilterValue = "전체" | "A-Z" | (typeof KOREAN_INITIALS)[number];
 
 type BrandGroup = {
   brand: string;
@@ -43,6 +47,15 @@ const LIQUOR_PILLS: Array<{ value: LiquorFilterValue; label: string }> = [
   { value: "럼", label: "럼" },
   { value: "리큐르", label: "리큐르" },
   { value: "기타", label: "기타" },
+];
+
+const INITIAL_PILLS: Array<{ value: InitialFilterValue; label: string }> = [
+  { value: "전체", label: "전체" },
+  ...KOREAN_INITIALS.map((cho) => ({
+    value: cho as InitialFilterValue,
+    label: cho,
+  })),
+  { value: "A-Z", label: "A-Z" },
 ];
 
 const KNOWN_LIQUOR_TYPES = new Set<string>([
@@ -79,6 +92,17 @@ function matchesLiquorFilter(
     return !KNOWN_LIQUOR_TYPES.has(liquorType) || liquorType === "기타";
   }
   return liquorType === filter;
+}
+
+function matchesInitialKey(
+  brand: string,
+  initial: InitialFilterValue
+): boolean {
+  if (initial === "전체") return true;
+  const key = getBrandInitialKey(brand);
+  if (!key) return false;
+  if (initial === "A-Z") return /^[A-Z]$/.test(key);
+  return key === initial;
 }
 
 function companyLabel(companyType: string): string {
@@ -143,20 +167,23 @@ function PillButton({
   label,
   active,
   onClick,
+  size = "default",
 }: {
   label: string;
   active: boolean;
   onClick: () => void;
+  size?: "default" | "tiny";
 }) {
   return (
     <button
       type="button"
       onClick={onClick}
       className={[
-        "shrink-0 rounded-full px-3.5 py-2 text-xs font-semibold transition sm:text-sm",
+        "shrink-0 rounded-full font-medium transition",
+        size === "tiny" ? "min-w-6 px-1.5 py-0.5 text-xs" : "px-2.5 py-1 text-sm",
         active
           ? "bg-gray-900 text-white"
-          : "bg-gray-100 text-gray-700 hover:bg-gray-200",
+          : "bg-transparent text-gray-400 hover:bg-gray-50 hover:text-gray-600",
       ].join(" ")}
     >
       {label}
@@ -201,6 +228,10 @@ export default function CustomerMenuBoard() {
     useState<CompanyFilterValue>("전체");
   const [liquorFilter, setLiquorFilter] = useState<LiquorFilterValue>("전체");
   const [searchTerm, setSearchTerm] = useState("");
+  const [initialFilter, setInitialFilter] =
+    useState<InitialFilterValue>("전체");
+  const [brandFilter, setBrandFilter] = useState<string | null>(null);
+  const [brandSearchOpen, setBrandSearchOpen] = useState(false);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -288,6 +319,25 @@ export default function CustomerMenuBoard() {
     };
   }, []);
 
+  /** 초성에 해당하는 브랜드 목록 (전체 products 기준) */
+  const brandsForInitial = useMemo(() => {
+    const seen = new Set<string>();
+    const brands: string[] = [];
+    for (const row of products) {
+      if (!matchesInitialKey(row.brand, initialFilter)) continue;
+      if (seen.has(row.brand)) continue;
+      seen.add(row.brand);
+      brands.push(row.brand);
+    }
+    return brands.sort((a, b) => a.localeCompare(b, "ko"));
+  }, [products, initialFilter]);
+
+  useEffect(() => {
+    if (brandFilter && !brandsForInitial.includes(brandFilter)) {
+      setBrandFilter(null);
+    }
+  }, [brandsForInitial, brandFilter]);
+
   const filteredProducts = useMemo(() => {
     const keyword = searchTerm.trim().toLowerCase();
 
@@ -298,6 +348,12 @@ export default function CustomerMenuBoard() {
       if (!matchesLiquorFilter(row.liquorType, liquorFilter)) {
         return false;
       }
+      if (brandFilter && row.brand !== brandFilter) {
+        return false;
+      }
+      if (initialFilter !== "전체" && !brandFilter) {
+        if (!matchesInitialKey(row.brand, initialFilter)) return false;
+      }
       if (keyword) {
         const inName = row.name.toLowerCase().includes(keyword);
         const inBrand = row.brand.toLowerCase().includes(keyword);
@@ -305,28 +361,44 @@ export default function CustomerMenuBoard() {
       }
       return true;
     });
-  }, [products, companyFilter, liquorFilter, searchTerm]);
+  }, [
+    products,
+    companyFilter,
+    liquorFilter,
+    searchTerm,
+    brandFilter,
+    initialFilter,
+  ]);
 
   const companyGroups = useMemo(
     () => groupFilteredProducts(filteredProducts),
     [filteredProducts]
   );
 
+  function handleSelectInitial(value: InitialFilterValue) {
+    setInitialFilter(value);
+    setBrandFilter(null);
+  }
+
+  function handleSelectBrand(brand: string) {
+    setBrandFilter((prev) => (prev === brand ? null : brand));
+  }
+
   return (
     <main className="flex min-h-screen w-full flex-col bg-gray-50">
-      <header className="sticky top-0 z-20 border-b border-gray-200 bg-white px-3 pb-3 pt-4 sm:px-4">
+      <header className="sticky top-0 z-20 border-b border-gray-200 bg-white px-3 pb-2.5 pt-3 sm:px-4">
         <div className="text-center">
-          <h1 className="text-xl font-extrabold leading-tight tracking-tight text-gray-900 whitespace-pre-line sm:text-2xl">
+          <h1 className="text-lg font-extrabold leading-tight tracking-tight text-gray-900 whitespace-pre-line sm:text-xl">
             {"스페이스 샵 4주년\n구매 가능 리스트"}
           </h1>
-          <p className="mt-2 text-xs text-gray-500 sm:text-sm">
+          <p className="mt-1.5 text-xs text-gray-500">
             스페이스 컴퍼니 코리아 제품과 타사 제품 라인업입니다.
           </p>
         </div>
 
-        <div className="relative mx-auto mt-4 max-w-xl">
+        <div className="relative mx-auto mt-3 max-w-xl">
           <span
-            className="pointer-events-none absolute top-1/2 left-3.5 -translate-y-1/2 text-gray-400"
+            className="pointer-events-none absolute top-1/2 left-3 -translate-y-1/2 text-gray-400"
             aria-hidden
           >
             <svg
@@ -335,7 +407,7 @@ export default function CustomerMenuBoard() {
               fill="none"
               stroke="currentColor"
               strokeWidth="2"
-              className="h-4 w-4"
+              className="h-3.5 w-3.5"
             >
               <circle cx="11" cy="11" r="7" />
               <path d="m20 20-3.5-3.5" strokeLinecap="round" />
@@ -346,13 +418,13 @@ export default function CustomerMenuBoard() {
             value={searchTerm}
             onChange={(event) => setSearchTerm(event.target.value)}
             placeholder="제품명 또는 브랜드명 검색"
-            className="w-full rounded-xl border border-gray-200 bg-white py-2.5 pr-10 pl-10 text-sm text-gray-900 outline-none placeholder:text-gray-400 focus:border-gray-900"
+            className="w-full rounded-full border border-gray-200 bg-white py-1.5 pr-9 pl-9 text-sm text-gray-900 outline-none placeholder:text-gray-400 focus:border-gray-900"
           />
           {searchTerm && (
             <button
               type="button"
               onClick={() => setSearchTerm("")}
-              className="absolute top-1/2 right-2.5 flex h-7 w-7 -translate-y-1/2 items-center justify-center rounded-full text-gray-400 hover:bg-gray-100 hover:text-gray-700"
+              className="absolute top-1/2 right-2 flex h-6 w-6 -translate-y-1/2 items-center justify-center rounded-full text-xs text-gray-400 hover:bg-gray-100 hover:text-gray-700"
               aria-label="검색어 지우기"
             >
               ✕
@@ -360,8 +432,8 @@ export default function CustomerMenuBoard() {
           )}
         </div>
 
-        <div className="mt-3 space-y-2">
-          <div className="flex gap-1.5 overflow-x-auto pb-0.5 [-ms-overflow-style:none] [scrollbar-width:none] sm:flex-wrap [&::-webkit-scrollbar]:hidden">
+        <div className="mt-2.5 space-y-1">
+          <div className="flex gap-0.5 overflow-x-auto pb-0.5 [-ms-overflow-style:none] [scrollbar-width:none] sm:flex-wrap [&::-webkit-scrollbar]:hidden">
             {COMPANY_PILLS.map((pill) => (
               <PillButton
                 key={pill.value}
@@ -372,16 +444,63 @@ export default function CustomerMenuBoard() {
             ))}
           </div>
 
-          <div className="flex gap-1.5 overflow-x-auto pb-0.5 [-ms-overflow-style:none] [scrollbar-width:none] sm:flex-wrap [&::-webkit-scrollbar]:hidden">
-            {LIQUOR_PILLS.map((pill) => (
-              <PillButton
-                key={pill.value}
-                label={pill.label}
-                active={liquorFilter === pill.value}
-                onClick={() => setLiquorFilter(pill.value)}
-              />
-            ))}
+          <div className="flex flex-wrap items-center gap-0.5">
+            <div className="flex min-w-0 flex-1 gap-0.5 overflow-x-auto pb-0.5 [-ms-overflow-style:none] [scrollbar-width:none] sm:flex-wrap [&::-webkit-scrollbar]:hidden">
+              {LIQUOR_PILLS.map((pill) => (
+                <PillButton
+                  key={pill.value}
+                  label={pill.label}
+                  active={liquorFilter === pill.value}
+                  onClick={() => setLiquorFilter(pill.value)}
+                />
+              ))}
+            </div>
+
+            <button
+              type="button"
+              onClick={() => setBrandSearchOpen((prev) => !prev)}
+              className={[
+                "ml-auto shrink-0 rounded-full px-2.5 py-1 text-xs font-medium transition",
+                brandSearchOpen || initialFilter !== "전체" || brandFilter
+                  ? "bg-gray-900 text-white"
+                  : "bg-gray-50 text-gray-500 hover:text-gray-700",
+              ].join(" ")}
+              aria-expanded={brandSearchOpen}
+            >
+              브랜드 상세 검색 {brandSearchOpen ? "▴" : "▾"}
+            </button>
           </div>
+
+          {brandSearchOpen && (
+            <div className="space-y-1 border-t border-gray-100 pt-1.5">
+              <div className="flex gap-0.5 overflow-x-auto pb-0.5 [-ms-overflow-style:none] [scrollbar-width:none] sm:flex-wrap [&::-webkit-scrollbar]:hidden">
+                {INITIAL_PILLS.map((pill) => (
+                  <PillButton
+                    key={pill.value}
+                    label={pill.label}
+                    active={initialFilter === pill.value}
+                    onClick={() => handleSelectInitial(pill.value)}
+                    size="tiny"
+                  />
+                ))}
+              </div>
+
+              {/* 초성 '전체'일 때는 브랜드 태그 숨김 — 특정 초성 선택 시에만 노출 */}
+              {initialFilter !== "전체" && brandsForInitial.length > 0 && (
+                <div className="flex gap-0.5 overflow-x-auto pb-0.5 [-ms-overflow-style:none] [scrollbar-width:none] sm:flex-wrap [&::-webkit-scrollbar]:hidden">
+                  {brandsForInitial.map((brand) => (
+                    <PillButton
+                      key={brand}
+                      label={brand}
+                      active={brandFilter === brand}
+                      onClick={() => handleSelectBrand(brand)}
+                      size="tiny"
+                    />
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
         </div>
       </header>
 
