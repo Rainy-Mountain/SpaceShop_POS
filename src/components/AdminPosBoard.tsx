@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import { useEventDay } from "@/hooks/useEventDay";
 import {
   completePosPayment,
   fetchPendingPosOrders,
@@ -9,9 +10,10 @@ import {
 import { supabase } from "@/lib/supabase";
 
 /**
- * 매니저용 POS — pending 주문 Realtime + 결제 완료 시 재고 차감
+ * 매니저용 POS — pending 주문 Realtime + 결제 완료(매출 기록·재고 차감)
  */
 export default function AdminPosBoard() {
+  const { eventDay } = useEventDay();
   const [orders, setOrders] = useState<PendingPosOrder[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -78,7 +80,7 @@ export default function AdminPosBoard() {
     if (payingId) return;
 
     const confirmed = window.confirm(
-      `${order.queueNumber}번 ${order.customerName}님 결제를 완료할까요?\n샵 재고가 차감됩니다.`
+      `${order.queueNumber}번 ${order.customerName}님 결제를 완료할까요?\n샵 재고 차감 + ${eventDay}일차 매출 기록이 저장됩니다.`
     );
     if (!confirmed) return;
 
@@ -87,12 +89,19 @@ export default function AdminPosBoard() {
     setOrders((prev) => prev.filter((row) => row.id !== order.id));
 
     try {
-      await completePosPayment(order.id);
+      await completePosPayment(order.id, eventDay);
     } catch (err) {
       const message =
-        err instanceof Error ? err.message : "결제 처리에 실패했습니다.";
-      console.error(err);
-      window.alert(message);
+        err instanceof Error
+          ? err.message
+          : typeof err === "object" &&
+              err !== null &&
+              "message" in err &&
+              typeof (err as { message: unknown }).message === "string"
+            ? (err as { message: string }).message
+            : "결제 처리에 실패했습니다.";
+      console.error("[AdminPosBoard] 결제 완료 실패", err);
+      window.alert(`결제 실패: ${message}`);
       await loadOrders({ silent: true });
     } finally {
       setPayingId(null);

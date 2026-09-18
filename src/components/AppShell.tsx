@@ -8,7 +8,6 @@ import AppNav from "@/components/AppNav";
 const PUBLIC_PREFIXES = [
   "/public-menu",
   "/customer",
-  "/staff/qr",
   "/queue",
   "/order",
 ];

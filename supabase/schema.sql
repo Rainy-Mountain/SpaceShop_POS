@@ -91,3 +91,4 @@ alter table sales_logs replica identity full;
 -- alter publication supabase_realtime add table sales_logs;
 -- alter publication supabase_realtime add table orders;
 -- alter publication supabase_realtime add table order_items;
+-- alter publication supabase_realtime add table queues;

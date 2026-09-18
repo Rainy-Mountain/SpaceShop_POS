@@ -1,4 +1,6 @@
 import { supabase } from "@/lib/supabase";
+import { readStoredEventDay } from "@/lib/eventDay";
+import type { EventDay } from "@/types/dashboard";
 
 export type CartItem = {
   productId: string;
@@ -195,10 +197,22 @@ export async function fetchPendingPosOrders(): Promise<PendingPosOrder[]> {
 }
 
 /**
- * 결제 완료: orders → paid, queues → completed, inventory.storage_qty 차감
+ * 결제 완료:
+ * 1) sales_logs INSERT (대시보드 매출/최근 판매 반영)
+ * 2) inventory.storage_qty 차감
+ * 3) orders → paid, queues → completed
+ *
+ * 판매 기록·재고 차감을 먼저 처리한 뒤 상태를 바꿔, 실패 시 재시도 가능하게 함.
  */
-export async function completePosPayment(orderId: string): Promise<void> {
+export async function completePosPayment(
+  orderId: string,
+  dayNumber?: EventDay
+): Promise<void> {
   if (!orderId) throw new Error("주문 ID가 없습니다.");
+
+  const day: EventDay =
+    dayNumber ??
+    (typeof window !== "undefined" ? readStoredEventDay() : 1);
 
   const { data: order, error: fetchError } = await supabase
     .from("orders")
@@ -207,63 +221,140 @@ export async function completePosPayment(orderId: string): Promise<void> {
       id,
       queue_id,
       status,
-      order_items ( product_id, quantity )
+      order_items (
+        product_id,
+        quantity,
+        product_name,
+        products ( id, price, name )
+      )
     `
     )
     .eq("id", orderId)
     .single();
 
-  if (fetchError) throw fetchError;
+  if (fetchError) {
+    console.error("[completePosPayment] 주문 조회 실패", fetchError);
+    throw fetchError;
+  }
   if (!order) throw new Error("주문을 찾을 수 없습니다.");
   if (order.status !== "pending") {
     throw new Error("이미 처리된 주문입니다.");
   }
 
-  const { error: orderError } = await supabase
-    .from("orders")
-    .update({ status: "paid" })
-    .eq("id", orderId)
-    .eq("status", "pending");
-
-  if (orderError) throw orderError;
-
-  const { error: queueError } = await supabase
-    .from("queues")
-    .update({ status: "completed" })
-    .eq("id", order.queue_id);
-
-  if (queueError) throw queueError;
-
   const items = Array.isArray(order.order_items) ? order.order_items : [];
+  if (items.length === 0) {
+    throw new Error("주문 품목이 없습니다.");
+  }
 
-  for (const item of items) {
+  type SalePrep = {
+    productId: string;
+    quantity: number;
+    unitPrice: number;
+    productName: string;
+  };
+
+  const prepared: SalePrep[] = items.map((item) => {
     const productId = String(item.product_id ?? "");
     const quantity = Number(item.quantity) || 0;
-    if (!productId || quantity <= 0) continue;
+    const productRel = Array.isArray(item.products)
+      ? item.products[0]
+      : item.products;
+    const unitPrice = Number(
+      (productRel as { price?: number | string } | null)?.price ?? 0
+    );
+    const productName = String(
+      item.product_name ||
+        (productRel as { name?: string } | null)?.name ||
+        "제품"
+    );
 
-    const { data: inv, error: invError } = await supabase
-      .from("inventory")
-      .select("backup_qty, storage_qty, display_qty")
-      .eq("product_id", productId)
-      .maybeSingle();
-
-    if (invError) throw invError;
-    if (!inv) {
-      throw new Error(`재고 정보를 찾을 수 없습니다. (${productId})`);
+    if (!productId || quantity <= 0) {
+      throw new Error(`잘못된 주문 품목: ${productName}`);
     }
 
-    const storageQty = Number(inv.storage_qty) || 0;
-    const nextStorage = Math.max(0, storageQty - quantity);
+    return { productId, quantity, unitPrice, productName };
+  });
 
-    const { error: updateError } = await supabase
-      .from("inventory")
-      .update({
-        storage_qty: nextStorage,
-        last_updated: new Date().toISOString(),
-      })
-      .eq("product_id", productId);
+  // 1) 판매 기록 일괄 INSERT (sales_logs)
+  const saleRows = prepared.map((item) => ({
+    product_id: item.productId,
+    day_number: day,
+    sold_from: "창고" as const,
+    quantity: item.quantity,
+    total_price: item.unitPrice * item.quantity,
+  }));
 
-    if (updateError) throw updateError;
+  const { error: salesError } = await supabase
+    .from("sales_logs")
+    .insert(saleRows);
+
+  if (salesError) {
+    console.error("[completePosPayment] sales_logs insert 실패", salesError);
+    throw salesError;
+  }
+
+  // 2) 샵 재고(storage_qty) 차감 — 항목별 순차 처리
+  try {
+    for (const item of prepared) {
+      const { data: inv, error: invError } = await supabase
+        .from("inventory")
+        .select("backup_qty, storage_qty, display_qty")
+        .eq("product_id", item.productId)
+        .maybeSingle();
+
+      if (invError) throw invError;
+      if (!inv) {
+        throw new Error(
+          `"${item.productName}" 재고 정보를 찾을 수 없습니다.`
+        );
+      }
+
+      const storageQty = Number(inv.storage_qty) || 0;
+      if (storageQty < item.quantity) {
+        throw new Error(
+          `"${item.productName}" 샵 재고가 부족합니다. (현재 ${storageQty}개 / 필요 ${item.quantity}개)`
+        );
+      }
+
+      const { error: updateError } = await supabase
+        .from("inventory")
+        .update({
+          storage_qty: storageQty - item.quantity,
+          last_updated: new Date().toISOString(),
+        })
+        .eq("product_id", item.productId);
+
+      if (updateError) throw updateError;
+    }
+  } catch (err) {
+    console.error(
+      "[completePosPayment] 재고 차감 실패 — 판매 기록은 저장됐을 수 있음",
+      err
+    );
+    throw err;
+  }
+
+  // 3) 주문·대기열 상태 변경 (병렬)
+  const [orderResult, queueResult] = await Promise.all([
+    supabase
+      .from("orders")
+      .update({ status: "paid" })
+      .eq("id", orderId)
+      .eq("status", "pending"),
+    supabase
+      .from("queues")
+      .update({ status: "completed" })
+      .eq("id", order.queue_id),
+  ]);
+
+  if (orderResult.error) {
+    console.error("[completePosPayment] orders 상태 변경 실패", orderResult.error);
+    throw orderResult.error;
+  }
+  if (queueResult.error) {
+    console.error("[completePosPayment] queues 상태 변경 실패", queueResult.error);
+    throw queueResult.error;
   }
 }
+
 
