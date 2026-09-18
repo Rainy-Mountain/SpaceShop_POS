@@ -163,6 +163,9 @@ function groupFilteredProducts(rows: DashboardRow[]): CompanyGroup[] {
   });
 }
 
+const SCROLL_ROW =
+  "flex flex-nowrap gap-2 overflow-x-auto whitespace-nowrap pb-0.5 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden";
+
 function PillButton({
   label,
   active,
@@ -179,11 +182,13 @@ function PillButton({
       type="button"
       onClick={onClick}
       className={[
-        "shrink-0 rounded-full font-medium transition",
-        size === "tiny" ? "min-w-6 px-1.5 py-0.5 text-xs" : "px-2.5 py-1 text-sm",
+        "shrink-0 rounded-full font-medium whitespace-nowrap transition",
+        size === "tiny"
+          ? "min-w-10 px-3 py-2 text-sm"
+          : "px-3 py-2 text-sm",
         active
           ? "bg-gray-900 text-white"
-          : "bg-transparent text-gray-400 hover:bg-gray-50 hover:text-gray-600",
+          : "bg-gray-50 text-gray-400 hover:bg-gray-100 hover:text-gray-600",
       ].join(" ")}
     >
       {label}
@@ -432,8 +437,9 @@ export default function CustomerMenuBoard() {
           )}
         </div>
 
-        <div className="mt-2.5 space-y-1">
-          <div className="flex gap-0.5 overflow-x-auto pb-0.5 [-ms-overflow-style:none] [scrollbar-width:none] sm:flex-wrap [&::-webkit-scrollbar]:hidden">
+        <div className="mt-2.5 space-y-2">
+          {/* 1열: 제조사 — 가로 스와이프 */}
+          <div className={SCROLL_ROW}>
             {COMPANY_PILLS.map((pill) => (
               <PillButton
                 key={pill.value}
@@ -444,36 +450,37 @@ export default function CustomerMenuBoard() {
             ))}
           </div>
 
-          <div className="flex flex-wrap items-center gap-0.5">
-            <div className="flex min-w-0 flex-1 gap-0.5 overflow-x-auto pb-0.5 [-ms-overflow-style:none] [scrollbar-width:none] sm:flex-wrap [&::-webkit-scrollbar]:hidden">
-              {LIQUOR_PILLS.map((pill) => (
-                <PillButton
-                  key={pill.value}
-                  label={pill.label}
-                  active={liquorFilter === pill.value}
-                  onClick={() => setLiquorFilter(pill.value)}
-                />
-              ))}
-            </div>
-
-            <button
-              type="button"
-              onClick={() => setBrandSearchOpen((prev) => !prev)}
-              className={[
-                "ml-auto shrink-0 rounded-full px-2.5 py-1 text-xs font-medium transition",
-                brandSearchOpen || initialFilter !== "전체" || brandFilter
-                  ? "bg-gray-900 text-white"
-                  : "bg-gray-50 text-gray-500 hover:text-gray-700",
-              ].join(" ")}
-              aria-expanded={brandSearchOpen}
-            >
-              브랜드 상세 검색 {brandSearchOpen ? "▴" : "▾"}
-            </button>
+          {/* 2열: 주종 — 가로 스와이프 */}
+          <div className={SCROLL_ROW}>
+            {LIQUOR_PILLS.map((pill) => (
+              <PillButton
+                key={pill.value}
+                label={pill.label}
+                active={liquorFilter === pill.value}
+                onClick={() => setLiquorFilter(pill.value)}
+              />
+            ))}
           </div>
 
+          {/* 브랜드 상세 검색 — 독립 줄, 넓은 터치 영역 */}
+          <button
+            type="button"
+            onClick={() => setBrandSearchOpen((prev) => !prev)}
+            className={[
+              "flex w-full items-center justify-center gap-1 rounded-xl py-2.5 text-sm font-medium transition",
+              brandSearchOpen || initialFilter !== "전체" || brandFilter
+                ? "bg-gray-900 text-white"
+                : "bg-gray-50 text-gray-500 hover:bg-gray-100 hover:text-gray-700",
+            ].join(" ")}
+            aria-expanded={brandSearchOpen}
+          >
+            브랜드 상세 검색 {brandSearchOpen ? "▴" : "▾"}
+          </button>
+
           {brandSearchOpen && (
-            <div className="space-y-1 border-t border-gray-100 pt-1.5">
-              <div className="flex gap-0.5 overflow-x-auto pb-0.5 [-ms-overflow-style:none] [scrollbar-width:none] sm:flex-wrap [&::-webkit-scrollbar]:hidden">
+            <div className="space-y-2 border-t border-gray-100 pt-2">
+              {/* 3열: 초성 — 가로 스와이프, 터치 영역 확대 */}
+              <div className={SCROLL_ROW}>
                 {INITIAL_PILLS.map((pill) => (
                   <PillButton
                     key={pill.value}
@@ -485,16 +492,15 @@ export default function CustomerMenuBoard() {
                 ))}
               </div>
 
-              {/* 초성 '전체'일 때는 브랜드 태그 숨김 — 특정 초성 선택 시에만 노출 */}
+              {/* 초성 '전체'일 때는 브랜드 태그 숨김 */}
               {initialFilter !== "전체" && brandsForInitial.length > 0 && (
-                <div className="flex gap-0.5 overflow-x-auto pb-0.5 [-ms-overflow-style:none] [scrollbar-width:none] sm:flex-wrap [&::-webkit-scrollbar]:hidden">
+                <div className={SCROLL_ROW}>
                   {brandsForInitial.map((brand) => (
                     <PillButton
                       key={brand}
                       label={brand}
                       active={brandFilter === brand}
                       onClick={() => handleSelectBrand(brand)}
-                      size="tiny"
                     />
                   ))}
                 </div>
@@ -585,11 +591,11 @@ export default function CustomerMenuBoard() {
                           return (
                             <li
                               key={row.id}
-                              className="flex items-start gap-2 px-1.5 py-2.5 select-none"
+                              className="flex items-center gap-2 px-1.5 py-2.5 select-none"
                             >
                               <p
                                 className={[
-                                  "min-w-0 flex-1 text-sm leading-snug",
+                                  "min-w-0 flex-1 truncate text-sm leading-snug",
                                   soldOut
                                     ? "text-gray-400 line-through"
                                     : "font-medium text-gray-800",
@@ -597,7 +603,9 @@ export default function CustomerMenuBoard() {
                               >
                                 {row.name}
                               </p>
-                              <ProductStatusBadges row={row} />
+                              <div className="shrink-0">
+                                <ProductStatusBadges row={row} />
+                              </div>
                             </li>
                           );
                         })}
