@@ -10,9 +10,12 @@ import {
   sortInitialKeys,
 } from "@/lib/koreanInitial";
 import {
+  clearAllSmartOrderTestData,
   completePosPayment,
+  deleteOrderAndQueue,
   fetchPendingPosOrders,
   loadSmartOrderForKiosk,
+  SMART_ORDER_TRUNCATE_HINT,
   type PendingPosOrder,
 } from "@/lib/orderActions";
 import { supabase } from "@/lib/supabase";
@@ -44,6 +47,28 @@ function toNumber(value: unknown): number {
   return 0;
 }
 
+function orderItemCount(order: PendingPosOrder): number {
+  return order.items.reduce((sum, item) => sum + (item.quantity || 0), 0);
+}
+
+function TrashIcon({ className }: { className?: string }) {
+  return (
+    <svg
+      xmlns="http://www.w3.org/2000/svg"
+      viewBox="0 0 24 24"
+      fill="currentColor"
+      className={className}
+      aria-hidden
+    >
+      <path
+        fillRule="evenodd"
+        d="M16.5 4.478v.227a48.816 48.816 0 0 1 3.878.512.75.75 0 1 1-.256 1.478l-.209-.035-1.005 12.054A3 3 0 0 1 15.916 21H8.084a3 3 0 0 1-2.992-2.786L4.087 6.66l-.209.035a.75.75 0 0 1-.256-1.478A48.567 48.567 0 0 1 7.5 4.705v-.227c0-1.564 1.213-2.927 2.71-3.346A48.788 48.788 0 0 1 12 1.5c1.276 0 2.54.078 3.79.233 1.497.419 2.71 1.782 2.71 3.346ZM6.844 6.75l.948 11.368a1.5 1.5 0 0 0 1.492 1.382h7.432a1.5 1.5 0 0 0 1.492-1.382l.948-11.368H6.844ZM9.75 9a.75.75 0 0 1 .75.75v6.75a.75.75 0 0 1-1.5 0V9.75A.75.75 0 0 1 9.75 9Zm4.5 0a.75.75 0 0 1 .75.75v6.75a.75.75 0 0 1-1.5 0V9.75a.75.75 0 0 1 .75-.75Z"
+        clipRule="evenodd"
+      />
+    </svg>
+  );
+}
+
 function CartPanel({
   cart,
   totalQty,
@@ -56,6 +81,12 @@ function CartPanel({
   onCheckout,
   smartOrderLabel,
   onClearSmartOrder,
+  pendingOrders,
+  acceptingOrderId,
+  deletingOrderId,
+  activeSmartOrderId,
+  onAcceptOrder,
+  onDeleteOrder,
 }: {
   cart: CartItem[];
   totalQty: number;
@@ -68,143 +99,229 @@ function CartPanel({
   onCheckout: () => void;
   smartOrderLabel?: string | null;
   onClearSmartOrder?: () => void;
+  pendingOrders: PendingPosOrder[];
+  acceptingOrderId: string | null;
+  deletingOrderId: string | null;
+  activeSmartOrderId: string | null;
+  onAcceptOrder: (order: PendingPosOrder) => void;
+  onDeleteOrder: (order: PendingPosOrder) => void;
 }) {
   return (
     <div className="flex h-full min-h-0 flex-col bg-white">
-      <div className="flex items-center justify-between border-b border-slate-100 px-4 py-3">
-        <div>
-          <h2 className="text-base font-bold text-slate-900 sm:text-lg">
-            장바구니
-          </h2>
-          <p className="text-xs text-slate-500">
-            {smartOrderLabel
-              ? `스마트 오더 · ${smartOrderLabel}`
-              : cart.length === 0
-                ? "담긴 제품이 없습니다"
-                : `${cart.length}종류 · 샵 재고에서 차감`}
-          </p>
-        </div>
-        {showClose && (
-          <button
-            type="button"
-            onClick={onClose}
-            className="rounded-lg px-2.5 py-1.5 text-sm font-semibold text-slate-500 hover:bg-slate-100 hover:text-slate-800"
-          >
-            닫기
-          </button>
-        )}
-      </div>
-
-      {smartOrderLabel && (
-        <div className="flex items-center justify-between gap-2 border-b border-sky-100 bg-sky-50 px-4 py-2">
-          <p className="text-xs font-semibold text-sky-800">
-            {smartOrderLabel} 주문서 로드됨
-          </p>
-          {onClearSmartOrder && (
+      {/* 고정형 스마트 오더 대기열 */}
+      <section className="flex max-h-[40%] min-h-[10.5rem] flex-col border-b border-slate-200">
+        <div className="flex items-center justify-between px-4 py-2.5">
+          <div>
+            <h2 className="text-sm font-bold text-slate-900 sm:text-base">
+              스마트 오더 대기열
+            </h2>
+            <p className="text-[11px] text-slate-500">
+              pending · 순번 오름차순
+              {pendingOrders.length > 0 ? ` · ${pendingOrders.length}건` : ""}
+            </p>
+          </div>
+          {showClose && (
             <button
               type="button"
-              onClick={onClearSmartOrder}
-              className="text-xs font-semibold text-sky-600 underline"
+              onClick={onClose}
+              className="rounded-lg px-2.5 py-1.5 text-sm font-semibold text-slate-500 hover:bg-slate-100 hover:text-slate-800"
             >
-              해제
+              닫기
             </button>
           )}
         </div>
-      )}
 
-      <div className="min-h-0 flex-1 overflow-y-auto px-3 py-2">
-        {cart.length === 0 ? (
-          <div className="flex h-full min-h-[8rem] items-center justify-center text-sm text-slate-400">
-            제품을 선택해 담아 주세요
-          </div>
-        ) : (
-          <ul className="space-y-2">
-            {cart.map((item) => (
-              <li
-                key={item.id}
-                className="rounded-xl border border-slate-100 bg-slate-50 px-3 py-2.5"
-              >
-                <div className="flex items-start justify-between gap-2">
-                  <div className="min-w-0">
-                    <p className="truncate text-xs text-slate-400">
-                      {item.brand}
-                    </p>
-                    <p className="truncate text-sm font-semibold text-slate-900">
-                      {item.name}
-                    </p>
-                    <p className="mt-0.5 text-xs text-slate-500">
-                      {formatPrice(item.price)}원 · 최대 {item.maxQty}개
-                    </p>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => onRemove(item.id)}
-                    className="shrink-0 rounded-lg px-2 py-1 text-xs font-semibold text-rose-600 hover:bg-rose-50"
+        <div className="min-h-0 flex-1 overflow-y-auto px-3 pb-3">
+          {pendingOrders.length === 0 ? (
+            <div className="flex h-full min-h-[4.5rem] items-center justify-center rounded-xl border border-dashed border-slate-200 bg-slate-50/80 px-3 text-center text-xs text-slate-400">
+              대기 중인 스마트 오더가 없습니다
+            </div>
+          ) : (
+            <ul className="space-y-1.5">
+              {pendingOrders.map((order) => {
+                const isActive = activeSmartOrderId === order.id;
+                const qty = orderItemCount(order);
+                return (
+                  <li
+                    key={order.id}
+                    className={[
+                      "flex items-center gap-2 rounded-xl border px-2.5 py-2",
+                      isActive
+                        ? "border-sky-200 bg-sky-50"
+                        : "border-slate-100 bg-slate-50",
+                    ].join(" ")}
                   >
-                    삭제
-                  </button>
-                </div>
-
-                <div className="mt-2 flex items-center justify-between">
-                  <div className="inline-flex items-center gap-1 rounded-lg bg-white p-0.5 shadow-sm">
+                    <div className="min-w-0 flex-1">
+                      <p className="truncate text-sm font-bold text-slate-900">
+                        {order.queueNumber}번 {order.customerName}
+                      </p>
+                      <p className="text-[11px] text-slate-500">
+                        품목 {order.items.length}종 · {qty}개
+                        {isActive ? " · 장바구니 로드됨" : ""}
+                      </p>
+                    </div>
                     <button
                       type="button"
-                      onClick={() => onChangeQty(item.id, -1)}
-                      className="flex h-9 w-9 items-center justify-center rounded-md text-lg font-bold text-slate-700 hover:bg-slate-100"
-                      aria-label="수량 감소"
+                      disabled={
+                        acceptingOrderId === order.id || isActive || checkingOut
+                      }
+                      onClick={() => onAcceptOrder(order)}
+                      className="shrink-0 rounded-lg bg-sky-600 px-2.5 py-1.5 text-[11px] font-bold text-white hover:bg-sky-500 disabled:cursor-not-allowed disabled:bg-slate-300"
                     >
-                      −
+                      {acceptingOrderId === order.id
+                        ? "불러오는 중…"
+                        : isActive
+                          ? "로드됨"
+                          : "불러오기"}
                     </button>
-                    <span className="min-w-[2rem] text-center text-base font-bold tabular-nums text-slate-900">
-                      {item.qty}
-                    </span>
                     <button
                       type="button"
-                      onClick={() => onChangeQty(item.id, 1)}
-                      disabled={item.qty >= item.maxQty}
-                      className="flex h-9 w-9 items-center justify-center rounded-md text-lg font-bold text-slate-700 hover:bg-slate-100 disabled:opacity-40"
-                      aria-label="수량 증가"
+                      disabled={deletingOrderId === order.id}
+                      onClick={() => onDeleteOrder(order)}
+                      className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-slate-400 hover:bg-red-50 hover:text-red-500 disabled:opacity-40"
+                      aria-label="주문 삭제"
+                      title="삭제"
                     >
-                      +
+                      <TrashIcon className="h-4 w-4" />
+                    </button>
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+        </div>
+      </section>
+
+      {/* 현재 장바구니 */}
+      <section className="flex min-h-0 flex-1 flex-col">
+        <div className="flex items-center justify-between border-b border-slate-100 px-4 py-2.5">
+          <div>
+            <h2 className="text-sm font-bold text-slate-900 sm:text-base">
+              현재 장바구니
+            </h2>
+            <p className="text-[11px] text-slate-500">
+              {smartOrderLabel
+                ? `스마트 오더 · ${smartOrderLabel}`
+                : cart.length === 0
+                  ? "담긴 제품이 없습니다"
+                  : `${cart.length}종류 · 샵 재고에서 차감`}
+            </p>
+          </div>
+        </div>
+
+        {smartOrderLabel && (
+          <div className="flex items-center justify-between gap-2 border-b border-sky-100 bg-sky-50 px-4 py-2">
+            <p className="text-xs font-semibold text-sky-800">
+              {smartOrderLabel} 주문서 로드됨
+            </p>
+            {onClearSmartOrder && (
+              <button
+                type="button"
+                onClick={onClearSmartOrder}
+                className="text-xs font-semibold text-sky-600 underline"
+              >
+                해제
+              </button>
+            )}
+          </div>
+        )}
+
+        <div className="min-h-0 flex-1 overflow-y-auto px-3 py-2">
+          {cart.length === 0 ? (
+            <div className="flex h-full min-h-[6rem] items-center justify-center text-sm text-slate-400">
+              대기열에서 불러오거나 제품을 담아 주세요
+            </div>
+          ) : (
+            <ul className="space-y-2">
+              {cart.map((item) => (
+                <li
+                  key={item.id}
+                  className="rounded-xl border border-slate-100 bg-slate-50 px-3 py-2.5"
+                >
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="min-w-0">
+                      <p className="truncate text-xs text-slate-400">
+                        {item.brand}
+                      </p>
+                      <p className="truncate text-sm font-semibold text-slate-900">
+                        {item.name}
+                      </p>
+                      <p className="mt-0.5 text-xs text-slate-500">
+                        {formatPrice(item.price)}원 · 최대 {item.maxQty}개
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => onRemove(item.id)}
+                      className="shrink-0 rounded-lg px-2 py-1 text-xs font-semibold text-rose-600 hover:bg-rose-50"
+                    >
+                      삭제
                     </button>
                   </div>
-                  <p className="text-sm font-bold tabular-nums text-slate-900">
-                    {formatPrice(item.price * item.qty)}원
-                  </p>
-                </div>
-              </li>
-            ))}
-          </ul>
-        )}
-      </div>
 
-      <div className="border-t border-slate-200 bg-slate-50 px-4 py-4">
-        <div className="mb-1 flex items-end justify-between">
-          <span className="text-sm font-medium text-slate-600">총 수량</span>
-          <span className="text-xl font-bold tabular-nums text-slate-900">
-            {totalQty}
-            <span className="ml-0.5 text-sm font-semibold text-slate-500">
-              개
+                  <div className="mt-2 flex items-center justify-between">
+                    <div className="inline-flex items-center gap-1 rounded-lg bg-white p-0.5 shadow-sm">
+                      <button
+                        type="button"
+                        onClick={() => onChangeQty(item.id, -1)}
+                        className="flex h-9 w-9 items-center justify-center rounded-md text-lg font-bold text-slate-700 hover:bg-slate-100"
+                        aria-label="수량 감소"
+                      >
+                        −
+                      </button>
+                      <span className="min-w-[2rem] text-center text-base font-bold tabular-nums text-slate-900">
+                        {item.qty}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => onChangeQty(item.id, 1)}
+                        disabled={item.qty >= item.maxQty}
+                        className="flex h-9 w-9 items-center justify-center rounded-md text-lg font-bold text-slate-700 hover:bg-slate-100 disabled:opacity-40"
+                        aria-label="수량 증가"
+                      >
+                        +
+                      </button>
+                    </div>
+                    <p className="text-sm font-bold tabular-nums text-slate-900">
+                      {formatPrice(item.price * item.qty)}원
+                    </p>
+                  </div>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+
+        <div className="border-t border-slate-200 bg-slate-50 px-4 py-4">
+          <div className="mb-1 flex items-end justify-between">
+            <span className="text-sm font-medium text-slate-600">총 수량</span>
+            <span className="text-xl font-bold tabular-nums text-slate-900">
+              {totalQty}
+              <span className="ml-0.5 text-sm font-semibold text-slate-500">
+                개
+              </span>
             </span>
-          </span>
-        </div>
-        <div className="mb-4 flex items-end justify-between">
-          <span className="text-sm font-medium text-slate-600">총 결제 금액</span>
-          <span className="text-2xl font-bold tabular-nums text-sky-700 sm:text-3xl">
-            {formatPrice(totalPrice)}
-            <span className="ml-0.5 text-base font-semibold">원</span>
-          </span>
-        </div>
+          </div>
+          <div className="mb-4 flex items-end justify-between">
+            <span className="text-sm font-medium text-slate-600">
+              총 결제 금액
+            </span>
+            <span className="text-2xl font-bold tabular-nums text-sky-700 sm:text-3xl">
+              {formatPrice(totalPrice)}
+              <span className="ml-0.5 text-base font-semibold">원</span>
+            </span>
+          </div>
 
-        <button
-          type="button"
-          disabled={cart.length === 0 || checkingOut}
-          onClick={onCheckout}
-          className="flex w-full items-center justify-center rounded-2xl bg-emerald-600 px-4 py-4 text-lg font-bold text-white shadow-md transition hover:bg-emerald-500 active:scale-[0.99] disabled:cursor-not-allowed disabled:bg-slate-300 disabled:shadow-none"
-        >
-          {checkingOut ? "결제 처리 중..." : "결제 완료"}
-        </button>
-      </div>
+          <button
+            type="button"
+            disabled={cart.length === 0 || checkingOut}
+            onClick={onCheckout}
+            className="flex w-full items-center justify-center rounded-2xl bg-emerald-600 px-4 py-4 text-lg font-bold text-white shadow-md transition hover:bg-emerald-500 active:scale-[0.99] disabled:cursor-not-allowed disabled:bg-slate-300 disabled:shadow-none"
+          >
+            {checkingOut ? "결제 처리 중..." : "결제 완료"}
+          </button>
+        </div>
+      </section>
     </div>
   );
 }
@@ -223,12 +340,14 @@ export default function KioskBoard() {
   const [selectedBrand, setSelectedBrand] = useState<string | null>(null);
   const [checkingOut, setCheckingOut] = useState(false);
   const [isCartOpen, setIsCartOpen] = useState(false);
-  const [smartNotices, setSmartNotices] = useState<PendingPosOrder[]>([]);
+  const [pendingOrders, setPendingOrders] = useState<PendingPosOrder[]>([]);
   const [activeSmartOrderId, setActiveSmartOrderId] = useState<string | null>(
     null
   );
   const [activeSmartLabel, setActiveSmartLabel] = useState<string | null>(null);
   const [acceptingOrderId, setAcceptingOrderId] = useState<string | null>(null);
+  const [deletingOrderId, setDeletingOrderId] = useState<string | null>(null);
+  const [clearingAll, setClearingAll] = useState(false);
 
   async function loadProducts(options?: { silent?: boolean }) {
     if (!options?.silent) {
@@ -274,24 +393,22 @@ export default function KioskBoard() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [eventDay]);
 
-  // 스마트 오더 pending 목록 + Realtime
+  // 스마트 오더 pending 고정 리스트 + Realtime (paid 되면 목록에서 사라짐)
   useEffect(() => {
     if (typeof window === "undefined") return;
 
     let timer: number | null = null;
 
-        async function refreshNotices() {
+    async function refreshPendingOrders() {
       try {
         const pending = await fetchPendingPosOrders();
-        setSmartNotices(
-          pending.filter((order) => order.id !== activeSmartOrderId)
-        );
+        setPendingOrders(pending);
       } catch (err) {
-        console.error("[KioskBoard] smart order 목록 실패", err);
+        console.error("[KioskBoard] pending 대기열 목록 실패", err);
       }
     }
 
-    void refreshNotices();
+    void refreshPendingOrders();
 
     const channel = supabase
       .channel("realtime:kiosk-smart-orders")
@@ -301,7 +418,7 @@ export default function KioskBoard() {
         () => {
           if (timer != null) window.clearTimeout(timer);
           timer = window.setTimeout(() => {
-            void refreshNotices();
+            void refreshPendingOrders();
           }, 120);
         }
       )
@@ -311,8 +428,7 @@ export default function KioskBoard() {
       if (timer != null) window.clearTimeout(timer);
       void supabase.removeChannel(channel);
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeSmartOrderId]);
+  }, []);
 
   useEffect(() => {
     let timer: number | null = null;
@@ -516,8 +632,37 @@ export default function KioskBoard() {
     setCart([]);
   }
 
+  function extractErrorMessage(err: unknown, fallback: string): string {
+    if (err instanceof Error && err.message) return err.message;
+    if (typeof err === "object" && err != null) {
+      const maybe = err as { message?: unknown; error_description?: unknown };
+      if (typeof maybe.message === "string" && maybe.message.trim()) {
+        return maybe.message;
+      }
+      if (
+        typeof maybe.error_description === "string" &&
+        maybe.error_description.trim()
+      ) {
+        return maybe.error_description;
+      }
+    }
+    if (typeof err === "string" && err.trim()) return err;
+    return fallback;
+  }
+
   async function acceptSmartOrder(order: PendingPosOrder) {
     if (acceptingOrderId) return;
+    if (
+      cart.length > 0 &&
+      activeSmartOrderId &&
+      activeSmartOrderId !== order.id
+    ) {
+      const ok = window.confirm(
+        "현재 장바구니에 다른 스마트 오더가 있습니다. 덮어쓰시겠습니까?"
+      );
+      if (!ok) return;
+    }
+
     setAcceptingOrderId(order.id);
     try {
       const { order: detail, cartItems } = await loadSmartOrderForKiosk(
@@ -528,35 +673,87 @@ export default function KioskBoard() {
         return;
       }
 
-      // 현재 재고 기준으로 maxQty 보정
+      // 로컬 인벤토리(products)와 병합해 키오스크 CartItem 규격에 맞춤
       const nextCart: CartItem[] = cartItems.map((item) => {
         const row = products.find((p) => p.id === item.id);
-        const maxQty = Math.max(row?.storageQty ?? item.qty, item.qty);
+        const maxQty = Math.max(
+          row?.storageQty ?? 0,
+          item.maxQty,
+          item.qty,
+          1
+        );
         return {
-          ...item,
-          maxQty,
-          qty: Math.min(item.qty, maxQty),
-          price: row?.price ?? item.price,
+          id: item.id,
+          name: row?.name || item.name,
           brand: row?.brand || item.brand,
+          price: row?.price ?? item.price,
+          qty: Math.min(item.qty, maxQty),
+          maxQty,
         };
       });
 
       setCart(nextCart);
       setActiveSmartOrderId(detail.id);
       setActiveSmartLabel(`${detail.queueNumber}번 ${detail.customerName}`);
-      setSmartNotices((prev) => prev.filter((row) => row.id !== detail.id));
       setIsCartOpen(true);
       pushToast(
         `스마트 오더 ${detail.queueNumber}번 · ${detail.customerName} 불러옴`,
         "success"
       );
     } catch (err) {
-      const message =
-        err instanceof Error ? err.message : "스마트 오더를 불러오지 못했습니다.";
-      console.error(err);
-      pushToast(message, "danger");
+      console.error("[KioskBoard] acceptSmartOrder failed", err);
+      const message = extractErrorMessage(
+        err,
+        "스마트 오더를 불러오지 못했습니다."
+      );
+      pushToast(`불러오기 실패: ${message}`, "danger");
+      window.alert(`불러오기 실패: ${message}`);
     } finally {
       setAcceptingOrderId(null);
+    }
+  }
+
+  async function handleDeleteOrder(order: PendingPosOrder) {
+    const ok = window.confirm(
+      "이 대기열/주문 내역을 정말 삭제하시겠습니까?"
+    );
+    if (!ok) return;
+
+    setDeletingOrderId(order.id);
+    try {
+      await deleteOrderAndQueue(order.id);
+      setPendingOrders((prev) => prev.filter((row) => row.id !== order.id));
+      if (activeSmartOrderId === order.id) {
+        clearSmartOrder();
+      }
+      pushToast("주문 내역을 삭제했습니다", "success");
+    } catch (err) {
+      console.error("[KioskBoard] deleteOrder failed", err);
+      const message = extractErrorMessage(err, "삭제에 실패했습니다.");
+      pushToast(message, "danger");
+    } finally {
+      setDeletingOrderId(null);
+    }
+  }
+
+  async function handleClearAllTestData() {
+    const ok = window.confirm(
+      "경고: 현재 쌓여있는 모든 대기열과 주문 내역이 완전히 삭제됩니다. 실전 행사 중이라면 절대 누르지 마세요. 계속하시겠습니까?"
+    );
+    if (!ok) return;
+
+    setClearingAll(true);
+    try {
+      await clearAllSmartOrderTestData();
+      clearSmartOrder();
+      setPendingOrders([]);
+      window.location.reload();
+    } catch (err) {
+      console.error("[KioskBoard] clearAllTestData failed", err);
+      const message = extractErrorMessage(err, SMART_ORDER_TRUNCATE_HINT);
+      window.alert(message);
+    } finally {
+      setClearingAll(false);
     }
   }
 
@@ -566,11 +763,16 @@ export default function KioskBoard() {
     setCheckingOut(true);
     try {
       if (activeSmartOrderId) {
-        await completePosPayment(activeSmartOrderId, eventDay);
+        const paidOrderId = activeSmartOrderId;
+        await completePosPayment(paidOrderId, eventDay);
         const label = activeSmartLabel ?? "스마트 오더";
+        // 결제 후 장바구니·스마트 오더 상태 초기화 → 다음 대기열 준비
         setCart([]);
         setActiveSmartOrderId(null);
         setActiveSmartLabel(null);
+        setPendingOrders((prev) =>
+          prev.filter((row) => row.id !== paidOrderId)
+        );
         setIsCartOpen(false);
         pushToast(`✅ ${label} 결제 완료!`, "success");
       } else {
@@ -590,8 +792,8 @@ export default function KioskBoard() {
       }
       void loadProducts({ silent: true });
     } catch (err) {
-      const message =
-        err instanceof Error ? err.message : "결제 처리에 실패했습니다.";
+      console.error("[KioskBoard] checkout failed", err);
+      const message = extractErrorMessage(err, "결제 처리에 실패했습니다.");
       alert(message);
       void loadProducts({ silent: true });
     } finally {
@@ -609,6 +811,12 @@ export default function KioskBoard() {
     onCheckout: () => void handleCheckout(),
     smartOrderLabel: activeSmartLabel,
     onClearSmartOrder: clearSmartOrder,
+    pendingOrders,
+    acceptingOrderId,
+    deletingOrderId,
+    activeSmartOrderId,
+    onAcceptOrder: (order: PendingPosOrder) => void acceptSmartOrder(order),
+    onDeleteOrder: (order: PendingPosOrder) => void handleDeleteOrder(order),
   };
 
   return (
@@ -626,7 +834,16 @@ export default function KioskBoard() {
                   제품을 터치해 장바구니에 담으세요 · {eventDay}일차
                 </p>
               </div>
-              <div className="relative w-full max-w-xs sm:w-56">
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  disabled={clearingAll}
+                  onClick={() => void handleClearAllTestData()}
+                  className="rounded-lg border border-red-200 px-2.5 py-1.5 text-[11px] font-medium text-red-500 hover:bg-red-50 disabled:opacity-50"
+                >
+                  {clearingAll ? "초기화 중…" : "테스트 데이터 전체 초기화"}
+                </button>
+                <div className="relative w-full max-w-xs sm:w-56">
                 <input
                   type="search"
                   value={search}
@@ -644,6 +861,7 @@ export default function KioskBoard() {
                     ✕
                   </button>
                 )}
+              </div>
               </div>
             </div>
 
@@ -928,49 +1146,6 @@ export default function KioskBoard() {
       </button>
 
       <ToastStack toasts={toasts} onDismiss={dismissToast} />
-
-      {/* 스마트 오더 수신 알림 */}
-      {smartNotices.length > 0 && (
-        <div className="fixed right-4 bottom-24 z-[60] flex w-[min(100%-2rem,22rem)] flex-col gap-2 md:bottom-6">
-          {smartNotices.slice(0, 4).map((order) => (
-            <div
-              key={order.id}
-              className="rounded-2xl border border-sky-200 bg-white p-4 shadow-xl shadow-sky-900/10"
-            >
-              <p className="text-[11px] font-bold tracking-wide text-sky-600">
-                새로운 스마트 오더 도착
-              </p>
-              <p className="mt-1 text-lg font-extrabold text-slate-900">
-                순번 {order.queueNumber}번 · {order.customerName}
-              </p>
-              <p className="mt-0.5 text-xs text-slate-500">
-                {order.items.length}개 품목
-              </p>
-              <div className="mt-3 flex gap-2">
-                <button
-                  type="button"
-                  disabled={acceptingOrderId === order.id}
-                  onClick={() => void acceptSmartOrder(order)}
-                  className="flex-1 rounded-xl bg-sky-600 px-3 py-2.5 text-sm font-bold text-white hover:bg-sky-500 disabled:bg-slate-300"
-                >
-                  {acceptingOrderId === order.id ? "불러오는 중…" : "수락 / 확인"}
-                </button>
-                <button
-                  type="button"
-                  onClick={() =>
-                    setSmartNotices((prev) =>
-                      prev.filter((row) => row.id !== order.id)
-                    )
-                  }
-                  className="rounded-xl border border-slate-200 px-3 py-2.5 text-sm font-semibold text-slate-500 hover:bg-slate-50"
-                >
-                  나중에
-                </button>
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
     </div>
   );
 }
