@@ -196,6 +196,95 @@ export async function fetchPendingPosOrders(): Promise<PendingPosOrder[]> {
   return rows.sort((a, b) => a.queueNumber - b.queueNumber);
 }
 
+/** 키오스크 장바구니용 — 주문 품목 + 제품 가격/브랜드 */
+export async function loadSmartOrderForKiosk(orderId: string): Promise<{
+  order: PendingPosOrder;
+  cartItems: Array<{
+    id: string;
+    name: string;
+    brand: string;
+    price: number;
+    qty: number;
+    maxQty: number;
+  }>;
+}> {
+  const { data, error } = await supabase
+    .from("orders")
+    .select(
+      `
+      id,
+      queue_id,
+      status,
+      customer_name,
+      queue_number,
+      created_at,
+      queues ( queue_number, customer_name ),
+      order_items (
+        id,
+        product_id,
+        quantity,
+        product_name,
+        products ( id, name, brand, price )
+      )
+    `
+    )
+    .eq("id", orderId)
+    .single();
+
+  if (error) throw error;
+  if (!data) throw new Error("주문을 찾을 수 없습니다.");
+  if (data.status !== "pending") {
+    throw new Error("이미 처리된 주문이거나 대기 중이 아닙니다.");
+  }
+
+  const queue = normalizeQueueRelation(data.queues);
+  const order: PendingPosOrder = {
+    id: String(data.id),
+    queueId: String(data.queue_id),
+    queueNumber:
+      Number(data.queue_number) || Number(queue?.queue_number) || 0,
+    customerName:
+      String(data.customer_name ?? "").trim() ||
+      String(queue?.customer_name ?? "손님"),
+    createdAt: String(data.created_at ?? ""),
+    items: [],
+  };
+
+  const itemsRaw = Array.isArray(data.order_items) ? data.order_items : [];
+  const cartItems = itemsRaw.map((item) => {
+    const productRel = Array.isArray(item.products)
+      ? item.products[0]
+      : item.products;
+    const product = productRel as {
+      id?: string;
+      name?: string;
+      brand?: string;
+      price?: number | string;
+    } | null;
+
+    const qty = Number(item.quantity) || 0;
+    const price = Number(product?.price ?? 0);
+
+    return {
+      id: String(item.product_id),
+      name: String(item.product_name || product?.name || "제품"),
+      brand: String(product?.brand || ""),
+      price,
+      qty,
+      maxQty: Math.max(qty, 1),
+    };
+  });
+
+  order.items = cartItems.map((item, index) => ({
+    id: String(itemsRaw[index]?.id ?? item.id),
+    productId: item.id,
+    productName: item.name,
+    quantity: item.qty,
+  }));
+
+  return { order, cartItems };
+}
+
 /**
  * 결제 완료:
  * 1) sales_logs INSERT (대시보드 매출/최근 판매 반영)
