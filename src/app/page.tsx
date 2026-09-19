@@ -1,6 +1,7 @@
 import ExcelUpload from "@/components/ExcelUpload";
 import LiquorTypeBulkUpdate from "@/components/LiquorTypeBulkUpdate";
 import ManualProductForm from "@/components/ManualProductForm";
+import BulkInventoryPasteEntry from "@/components/BulkInventoryPasteEntry";
 
 export default function HomePage() {
   return (
@@ -15,6 +16,9 @@ export default function HomePage() {
         <p className="mt-3 text-sm text-slate-500">
           엑셀로 대량 업로드하거나, 신규 품목을 직접 등록하세요.
         </p>
+        <div className="mt-5 flex justify-center">
+          <BulkInventoryPasteEntry />
+        </div>
       </div>
 
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-2 lg:items-start">
