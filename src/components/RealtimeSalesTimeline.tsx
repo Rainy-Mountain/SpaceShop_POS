@@ -1,10 +1,13 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
-import { useEventDay } from "@/hooks/useEventDay";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { fetchSaleLogsWithProducts } from "@/lib/fetchSalesReport";
 import { supabase } from "@/lib/supabase";
+import type { EventDay } from "@/types/dashboard";
 import type { SaleLogWithProduct } from "@/types/salesReport";
+
+const EVENT_DAYS: EventDay[] = [1, 2, 3];
+const PER_DAY_LIMIT = 4;
 
 function formatTime(value: string): string {
   if (!value) return "--:--";
@@ -17,20 +20,50 @@ function formatTime(value: string): string {
   }).format(date);
 }
 
-function formatCurrency(value: number): string {
-  return `${new Intl.NumberFormat("ko-KR").format(value)}원`;
+function formatShortDate(value: string): string | null {
+  if (!value) return null;
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return null;
+  return new Intl.DateTimeFormat("ko-KR", {
+    month: "numeric",
+    day: "numeric",
+  }).format(date);
+}
+
+function groupLatestByDay(
+  logs: SaleLogWithProduct[]
+): Record<EventDay, SaleLogWithProduct[]> {
+  const grouped: Record<EventDay, SaleLogWithProduct[]> = {
+    1: [],
+    2: [],
+    3: [],
+  };
+
+  // logs는 이미 created_at 내림차순
+  for (const log of logs) {
+    const day = log.dayNumber as EventDay;
+    if (day !== 1 && day !== 2 && day !== 3) continue;
+    if (grouped[day].length >= PER_DAY_LIMIT) continue;
+    grouped[day].push(log);
+  }
+
+  return grouped;
 }
 
 /**
- * 선택한 행사 일자의 판매 로그를 최신순으로 보여 주고,
- * sales_logs INSERT 시 새로고침 없이 상단에 하이라이트하며 추가.
+ * 1~3일차 가로 다단 · 각 컬럼 최신 4건 · sales_logs Realtime
  */
 export default function RealtimeSalesTimeline() {
-  const { eventDay } = useEventDay();
-  const [sales, setSales] = useState<SaleLogWithProduct[]>([]);
+  const [byDay, setByDay] = useState<Record<EventDay, SaleLogWithProduct[]>>({
+    1: [],
+    2: [],
+    3: [],
+  });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [highlightIds, setHighlightIds] = useState<Set<string>>(() => new Set());
+  const [highlightIds, setHighlightIds] = useState<Set<string>>(
+    () => new Set()
+  );
   const knownIdsRef = useRef<Set<string>>(new Set());
   const highlightTimersRef = useRef<Map<string, number>>(new Map());
 
@@ -64,15 +97,19 @@ export default function RealtimeSalesTimeline() {
       }
 
       try {
-        const logs = await fetchSaleLogsWithProducts(eventDay);
+        const logs = await fetchSaleLogsWithProducts();
+        const grouped = groupLatestByDay(logs);
+        const visibleIds = EVENT_DAYS.flatMap((day) =>
+          grouped[day].map((log) => log.id)
+        );
+
         if (options?.flashNew) {
-          const fresh = logs
-            .map((log) => log.id)
-            .filter((id) => !knownIdsRef.current.has(id));
+          const fresh = visibleIds.filter((id) => !knownIdsRef.current.has(id));
           markHighlighted(fresh);
         }
-        knownIdsRef.current = new Set(logs.map((log) => log.id));
-        setSales(logs);
+
+        knownIdsRef.current = new Set(visibleIds);
+        setByDay(grouped);
       } catch (err) {
         const message =
           err instanceof Error
@@ -84,11 +121,10 @@ export default function RealtimeSalesTimeline() {
         if (!options?.silent) setLoading(false);
       }
     },
-    [eventDay, markHighlighted]
+    [markHighlighted]
   );
 
   useEffect(() => {
-    knownIdsRef.current = new Set();
     void load();
   }, [load]);
 
@@ -96,22 +132,11 @@ export default function RealtimeSalesTimeline() {
     let debounceTimer: number | null = null;
 
     const channel = supabase
-      .channel(`realtime:sales-timeline:${eventDay}`)
+      .channel("realtime:sales-timeline-grid")
       .on(
         "postgres_changes",
         { event: "*", schema: "public", table: "sales_logs" },
-        (payload) => {
-          const row = (payload.new ?? {}) as { day_number?: number | string };
-          const day =
-            row.day_number != null ? Number(row.day_number) : null;
-          // 다른 일차 INSERT는 무시 (DELETE 등은 전체 갱신)
-          if (
-            payload.eventType === "INSERT" &&
-            day != null &&
-            day !== eventDay
-          ) {
-            return;
-          }
+        () => {
           if (debounceTimer != null) window.clearTimeout(debounceTimer);
           debounceTimer = window.setTimeout(() => {
             void load({ silent: true, flashNew: true });
@@ -124,7 +149,7 @@ export default function RealtimeSalesTimeline() {
       if (debounceTimer != null) window.clearTimeout(debounceTimer);
       void supabase.removeChannel(channel);
     };
-  }, [eventDay, load]);
+  }, [load]);
 
   useEffect(() => {
     const timers = highlightTimersRef.current;
@@ -134,15 +159,26 @@ export default function RealtimeSalesTimeline() {
     };
   }, []);
 
+  const dayTitles = useMemo(() => {
+    return EVENT_DAYS.map((day) => {
+      const sample = byDay[day][0];
+      const dateLabel = sample ? formatShortDate(sample.createdAt) : null;
+      return {
+        day,
+        title: dateLabel ? `${day}일차 (${dateLabel})` : `${day}일차`,
+      };
+    });
+  }, [byDay]);
+
   return (
     <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
       <div className="flex flex-wrap items-end justify-between gap-2 border-b border-slate-100 px-5 py-4">
         <div>
           <h2 className="text-lg font-bold text-slate-900">
-            {eventDay}일차 실시간 판매 내역
+            오늘의 실시간 판매 내역
           </h2>
           <p className="mt-1 text-sm text-slate-500">
-            결제 완료 시 최신순으로 바로 반영됩니다
+            일자별 최신 {PER_DAY_LIMIT}건 · 결제 완료 시 바로 반영
           </p>
         </div>
         <span className="inline-flex items-center gap-1.5 rounded-full bg-emerald-50 px-2.5 py-1 text-[11px] font-semibold text-emerald-700">
@@ -160,85 +196,61 @@ export default function RealtimeSalesTimeline() {
         </div>
       )}
 
-      <div className="overflow-x-auto">
-        <table className="min-w-full border-collapse text-left text-sm">
-          <thead className="bg-slate-50 text-xs tracking-wide text-slate-500">
-            <tr>
-              <th className="whitespace-nowrap px-4 py-3 font-semibold sm:px-5">
-                결제 시간
-              </th>
-              <th className="whitespace-nowrap px-4 py-3 font-semibold sm:px-5">
-                제품명
-              </th>
-              <th className="whitespace-nowrap px-4 py-3 text-right font-semibold sm:px-5">
-                수량
-              </th>
-              <th className="whitespace-nowrap px-4 py-3 text-right font-semibold sm:px-5">
-                결제 금액
-              </th>
-            </tr>
-          </thead>
-          <tbody>
-            {loading ? (
-              Array.from({ length: 5 }).map((_, index) => (
-                <tr key={index} className="border-t border-slate-100">
-                  <td colSpan={4} className="px-4 py-3 sm:px-5">
-                    <div className="h-8 animate-pulse rounded-lg bg-slate-100" />
-                  </td>
-                </tr>
-              ))
-            ) : sales.length === 0 ? (
-              <tr>
-                <td
-                  colSpan={4}
-                  className="px-4 py-14 text-center text-slate-500 sm:px-5"
-                >
-                  아직 이 일차의 판매 기록이 없습니다
-                </td>
-              </tr>
-            ) : (
-              sales.map((sale, index) => {
-                const isNew = highlightIds.has(sale.id);
-                return (
-                  <tr
-                    key={sale.id}
-                    className={[
-                      "border-t border-slate-100 transition-colors duration-[1800ms] ease-out",
-                      isNew
-                        ? "bg-sky-100"
-                        : index === 0
-                          ? "bg-sky-50/40"
-                          : "bg-white hover:bg-slate-50/80",
-                    ].join(" ")}
-                  >
-                    <td className="whitespace-nowrap px-4 py-3.5 sm:px-5">
-                      <time className="text-sm font-bold tabular-nums text-sky-700">
-                        {formatTime(sale.createdAt)}
-                      </time>
-                    </td>
-                    <td className="min-w-[10rem] px-4 py-3.5 sm:px-5">
-                      <p className="text-xs font-medium text-slate-400">
-                        {sale.brand}
-                      </p>
-                      <p className="font-semibold text-slate-900">
-                        {sale.productName}
-                      </p>
-                    </td>
-                    <td className="whitespace-nowrap px-4 py-3.5 text-right tabular-nums font-semibold text-slate-900 sm:px-5">
-                      {sale.quantity}
-                      <span className="ml-0.5 text-xs font-medium text-slate-500">
-                        개
-                      </span>
-                    </td>
-                    <td className="whitespace-nowrap px-4 py-3.5 text-right tabular-nums font-bold text-emerald-700 sm:px-5">
-                      {formatCurrency(sale.totalPrice)}
-                    </td>
-                  </tr>
-                );
-              })
-            )}
-          </tbody>
-        </table>
+      <div className="grid grid-cols-1 gap-6 p-4 sm:p-5 md:grid-cols-3">
+        {dayTitles.map(({ day, title }) => {
+          const sales = byDay[day];
+          return (
+            <div key={day} className="min-w-0">
+              <h3 className="mb-3 border-b border-slate-100 pb-2 text-sm font-bold text-slate-800">
+                {title}
+              </h3>
+
+              {loading ? (
+                <ul className="space-y-2">
+                  {Array.from({ length: PER_DAY_LIMIT }).map((_, index) => (
+                    <li
+                      key={index}
+                      className="h-[3.25rem] animate-pulse rounded-lg border border-slate-100 bg-slate-50"
+                    />
+                  ))}
+                </ul>
+              ) : sales.length === 0 ? (
+                <p className="rounded-lg border border-dashed border-slate-200 px-3 py-8 text-center text-xs text-slate-400">
+                  판매 기록 없음
+                </p>
+              ) : (
+                <ul className="space-y-2">
+                  {sales.map((sale) => {
+                    const isNew = highlightIds.has(sale.id);
+                    return (
+                      <li
+                        key={sale.id}
+                        className={[
+                          "rounded-lg border px-3 py-2.5 transition-colors duration-[1800ms] ease-out",
+                          isNew
+                            ? "border-sky-200 bg-sky-100"
+                            : "border-slate-200 bg-white",
+                        ].join(" ")}
+                      >
+                        <div className="flex items-baseline justify-between gap-2">
+                          <time className="shrink-0 text-xs font-bold tabular-nums text-sky-700">
+                            {formatTime(sale.createdAt)}
+                          </time>
+                          <span className="shrink-0 text-xs font-semibold tabular-nums text-slate-700">
+                            {sale.quantity}개
+                          </span>
+                        </div>
+                        <p className="mt-1 truncate text-sm font-semibold leading-snug text-slate-900">
+                          {sale.productName}
+                        </p>
+                      </li>
+                    );
+                  })}
+                </ul>
+              )}
+            </div>
+          );
+        })}
       </div>
     </section>
   );
