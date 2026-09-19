@@ -266,6 +266,12 @@ export default function CustomerOrderBoard() {
   const [isCartOpen, setIsCartOpen] = useState(false);
   const [syncingCart, setSyncingCart] = useState(false);
   const [cartSyncError, setCartSyncError] = useState<string | null>(null);
+  const [queueNumber, setQueueNumber] = useState<number | null>(null);
+  const [customerName, setCustomerName] = useState<string>("");
+  /** 장바구니에 담긴 채 storage_qty가 0이 된 제품 (실시간 품절 노티) */
+  const [justSoldOutIds, setJustSoldOutIds] = useState<Set<string>>(
+    () => new Set()
+  );
 
   const [companyFilter, setCompanyFilter] =
     useState<CompanyFilterValue>("전체");
@@ -281,6 +287,26 @@ export default function CustomerOrderBoard() {
       router.replace("/");
     }
   }, [queueId, router]);
+
+  useEffect(() => {
+    if (typeof window === "undefined" || !queueId) return;
+    const activeQueueId = queueId;
+
+    void supabase
+      .from("queues")
+      .select("queue_number, customer_name")
+      .eq("id", activeQueueId)
+      .maybeSingle()
+      .then(({ data, error }) => {
+        if (error) {
+          console.error("[CustomerOrderBoard] queue 정보 조회 실패", error);
+          return;
+        }
+        if (!data) return;
+        setQueueNumber(Number(data.queue_number) || null);
+        setCustomerName(String(data.customer_name ?? "").trim());
+      });
+  }, [queueId]);
 
   useEffect(() => {
     if (typeof window === "undefined" || !queueId) return;
@@ -425,6 +451,29 @@ export default function CustomerOrderBoard() {
           }
           const storageQty = toNumber(next.storage_qty);
           const backupQty = toNumber(next.backup_qty);
+
+          // 장바구니에 있는 제품이 방금 품절(0)되면 노티 대상에 추가
+          if (storageQty === 0) {
+            setCart((currentCart) => {
+              if (currentCart.some((item) => item.productId === productId)) {
+                setJustSoldOutIds((prev) => {
+                  if (prev.has(productId)) return prev;
+                  const nextSet = new Set(prev);
+                  nextSet.add(productId);
+                  return nextSet;
+                });
+              }
+              return currentCart;
+            });
+          } else {
+            setJustSoldOutIds((prev) => {
+              if (!prev.has(productId)) return prev;
+              const nextSet = new Set(prev);
+              nextSet.delete(productId);
+              return nextSet;
+            });
+          }
+
           setProducts((prev) =>
             prev.map((row) =>
               row.id === productId
@@ -446,6 +495,20 @@ export default function CustomerOrderBoard() {
       void supabase.removeChannel(channel);
     };
   }, [queueId, submitted]);
+
+  const cartSoldOutIds = useMemo(() => {
+    const ids = new Set<string>();
+    for (const item of cart) {
+      const row = products.find((p) => p.id === item.productId);
+      const storage = row?.storageQty;
+      if (storage === 0 || justSoldOutIds.has(item.productId)) {
+        ids.add(item.productId);
+      }
+    }
+    return ids;
+  }, [cart, products, justSoldOutIds]);
+
+  const hasSoldOutInCart = cartSoldOutIds.size > 0;
 
   const brandsForInitial = useMemo(() => {
     const seen = new Set<string>();
@@ -587,6 +650,12 @@ export default function CustomerOrderBoard() {
     if (nextQty <= 0) {
       const nextCart = cart.filter((row) => row.productId !== productId);
       setCart(nextCart);
+      setJustSoldOutIds((prev) => {
+        if (!prev.has(productId)) return prev;
+        const next = new Set(prev);
+        next.delete(productId);
+        return next;
+      });
       await persistCart(nextCart);
       return;
     }
@@ -615,6 +684,12 @@ export default function CustomerOrderBoard() {
     if (submitted) return;
     const nextCart = cart.filter((row) => row.productId !== productId);
     setCart(nextCart);
+    setJustSoldOutIds((prev) => {
+      if (!prev.has(productId)) return prev;
+      const next = new Set(prev);
+      next.delete(productId);
+      return next;
+    });
     await persistCart(nextCart);
   }
 
@@ -1151,33 +1226,46 @@ export default function CustomerOrderBoard() {
         ].join(" ")}
         aria-hidden={!isCartOpen}
       >
-        <div className="flex items-center justify-between border-b border-gray-100 px-4 py-3.5">
-          <div>
-            <h2 className="text-base font-bold text-gray-900">장바구니</h2>
-            <p className="text-xs text-gray-400">
-              {cart.length === 0
-                ? "담긴 제품이 없습니다"
-                : `${cart.length}종류 · 총 ${cartItemCount}개`}
-            </p>
-          </div>
-          <button
-            type="button"
-            onClick={() => setIsCartOpen(false)}
-            className="flex h-9 w-9 items-center justify-center rounded-lg text-gray-400 transition hover:bg-gray-100 hover:text-gray-700"
-            aria-label="닫기"
-          >
-            <svg
-              xmlns="http://www.w3.org/2000/svg"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="2"
-              className="h-5 w-5"
-              aria-hidden
+        <div className="border-b border-sky-200 bg-sky-600 px-4 py-4 text-white">
+          <div className="flex items-start justify-between gap-2">
+            <div className="min-w-0">
+              <p className="text-xs font-semibold tracking-wide text-sky-100">
+                스마트 오더 · 손님 확인
+              </p>
+              <p className="mt-1 text-2xl font-black leading-tight tracking-tight sm:text-3xl">
+                대기번호:{" "}
+                <span className="tabular-nums">
+                  {queueNumber != null ? `${queueNumber}번` : "—"}
+                </span>
+              </p>
+              <p className="mt-1 truncate text-lg font-bold text-sky-50 sm:text-xl">
+                이름: {customerName || "손님"} 님
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => setIsCartOpen(false)}
+              className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-sky-100 transition hover:bg-sky-500 hover:text-white"
+              aria-label="닫기"
             >
-              <path d="M6 6l12 12M18 6 6 18" strokeLinecap="round" />
-            </svg>
-          </button>
+              <svg
+                xmlns="http://www.w3.org/2000/svg"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                className="h-5 w-5"
+                aria-hidden
+              >
+                <path d="M6 6l12 12M18 6 6 18" strokeLinecap="round" />
+              </svg>
+            </button>
+          </div>
+          <p className="mt-2 text-xs text-sky-100">
+            {cart.length === 0
+              ? "담긴 제품이 없습니다"
+              : `${cart.length}종류 · 총 ${cartItemCount}개`}
+          </p>
         </div>
 
         <div className="min-h-0 flex-1 overflow-y-auto px-3 py-3">
@@ -1192,27 +1280,47 @@ export default function CustomerOrderBoard() {
                   typeof item.price === "number" && Number.isFinite(item.price)
                     ? item.price
                     : products.find((p) => p.id === item.productId)?.price ?? 0;
+                const isSoldOut = cartSoldOutIds.has(item.productId);
 
                 return (
                   <li
                     key={item.productId}
-                    className="rounded-xl border border-gray-100 bg-gray-50 px-3 py-3"
+                    className={[
+                      "rounded-xl border px-3 py-3",
+                      isSoldOut
+                        ? "border-red-200 bg-red-50"
+                        : "border-gray-100 bg-gray-50",
+                    ].join(" ")}
                   >
                     <div className="flex items-start justify-between gap-2">
                       <div className="min-w-0">
                         <p className="truncate text-xs text-gray-400">
                           {item.brand}
                         </p>
-                        <p className="truncate text-sm font-semibold text-gray-900">
-                          {item.name}
-                        </p>
+                        <div className="flex flex-wrap items-center gap-1.5">
+                          <p
+                            className={[
+                              "truncate text-sm font-semibold",
+                              isSoldOut
+                                ? "text-red-800 line-through"
+                                : "text-gray-900",
+                            ].join(" ")}
+                          >
+                            {item.name}
+                          </p>
+                          {isSoldOut && (
+                            <span className="inline-flex shrink-0 rounded bg-red-600 px-1.5 py-0.5 text-[10px] font-bold text-white">
+                              🚨 방금 품절됨
+                            </span>
+                          )}
+                        </div>
                         <p className="mt-0.5 text-xs font-medium tabular-nums text-sky-700">
                           {formatPrice(unitPrice)}
                         </p>
                       </div>
                       <button
                         type="button"
-                        onClick={() => removeFromCart(item.productId)}
+                        onClick={() => void removeFromCart(item.productId)}
                         className="shrink-0 rounded-lg px-2 py-1 text-xs font-semibold text-rose-600 hover:bg-rose-50"
                       >
                         삭제
@@ -1223,10 +1331,11 @@ export default function CustomerOrderBoard() {
                       <div className="inline-flex items-center gap-1 rounded-lg bg-white p-0.5 shadow-sm">
                         <button
                           type="button"
+                          disabled={isSoldOut}
                           onClick={() =>
                             void changeCartQty(item.productId, -1)
                           }
-                          className="flex h-9 w-9 items-center justify-center rounded-md text-lg font-bold text-gray-700 hover:bg-gray-100"
+                          className="flex h-9 w-9 items-center justify-center rounded-md text-lg font-bold text-gray-700 hover:bg-gray-100 disabled:opacity-40"
                           aria-label="수량 감소"
                         >
                           −
@@ -1236,10 +1345,11 @@ export default function CustomerOrderBoard() {
                         </span>
                         <button
                           type="button"
+                          disabled={isSoldOut}
                           onClick={() =>
                             void changeCartQty(item.productId, 1)
                           }
-                          className="flex h-9 w-9 items-center justify-center rounded-md text-lg font-bold text-gray-700 hover:bg-gray-100"
+                          className="flex h-9 w-9 items-center justify-center rounded-md text-lg font-bold text-gray-700 hover:bg-gray-100 disabled:opacity-40"
                           aria-label="수량 증가"
                         >
                           +
@@ -1268,11 +1378,29 @@ export default function CustomerOrderBoard() {
           {cartSyncError && (
             <p className="mb-2 text-xs text-red-600">{cartSyncError}</p>
           )}
-          <p className="rounded-xl border border-amber-100 bg-amber-50 px-3 py-3 text-center text-sm leading-relaxed font-medium text-amber-800">
-            {syncingCart
-              ? "장바구니 동기화 중…"
-              : "선택을 마치셨다면, 직원에게 화면을 보여주세요."}
-          </p>
+          {hasSoldOutInCart ? (
+            <div className="rounded-xl border border-red-200 bg-red-50 px-3 py-3 text-center">
+              <p className="text-sm leading-relaxed font-bold text-red-700">
+                품절된 상품을 장바구니에서 삭제해야 직원 확인이 가능합니다.
+              </p>
+              <p className="mt-1 text-[11px] text-red-500">
+                직원에게 화면을 보여주기 전에 품절 품목을 먼저 삭제해 주세요.
+              </p>
+            </div>
+          ) : (
+            <p
+              className={[
+                "rounded-xl border px-3 py-3 text-center text-sm leading-relaxed font-medium",
+                syncingCart
+                  ? "border-gray-200 bg-gray-50 text-gray-500"
+                  : "border-amber-100 bg-amber-50 text-amber-800",
+              ].join(" ")}
+            >
+              {syncingCart
+                ? "장바구니 동기화 중…"
+                : "선택을 마치셨다면, 직원에게 화면을 보여주세요."}
+            </p>
+          )}
         </div>
       </aside>
     </main>

@@ -294,8 +294,22 @@ export default function StaffQrBoard() {
       .on(
         "postgres_changes",
         { event: "*", schema: "public", table: "inventory" },
-        () => {
-          if (!disposed) void loadStorageMap();
+        (payload) => {
+          const next = (payload.new ?? {}) as {
+            product_id?: string;
+            storage_qty?: number | string | null;
+          };
+          const productId = String(next.product_id ?? "");
+          if (productId && next.storage_qty != null) {
+            const storageQty = Number(next.storage_qty) || 0;
+            setStorageByProduct((prev) => {
+              const map = new Map(prev);
+              map.set(productId, storageQty);
+              return map;
+            });
+          } else if (!disposed) {
+            void loadStorageMap();
+          }
         }
       )
       .subscribe((status, err) => {
@@ -325,6 +339,19 @@ export default function StaffQrBoard() {
     const order = entry.activeOrder;
     if (!order || order.status !== "shopping" || order.items.length === 0) {
       window.alert("장바구니가 비어 있거나 이미 포스기로 전달된 주문입니다.");
+      return;
+    }
+
+    const soldOutItems = order.items.filter((item) => {
+      const storage = storageByProduct.get(item.productId);
+      return storage === 0;
+    });
+    if (soldOutItems.length > 0) {
+      window.alert(
+        `품절된 상품이 있어 포스기로 넘길 수 없습니다.\n(${soldOutItems
+          .map((item) => item.productName)
+          .join(", ")})\n손님에게 해당 품목 삭제를 안내해 주세요.`
+      );
       return;
     }
 
@@ -486,10 +513,14 @@ export default function StaffQrBoard() {
                 {entries.map((entry) => {
                   const phase = getPhase(entry);
                   const items = entry.activeOrder?.items ?? [];
+                  const hasSoldOut = items.some(
+                    (item) => storageByProduct.get(item.productId) === 0
+                  );
                   const canSend =
                     phase === "shopping" &&
                     items.length > 0 &&
-                    entry.activeOrder?.status === "shopping";
+                    entry.activeOrder?.status === "shopping" &&
+                    !hasSoldOut;
 
                   return (
                     <li
@@ -527,6 +558,7 @@ export default function StaffQrBoard() {
                               {items.map((item) => {
                                 const storage =
                                   storageByProduct.get(item.productId) ?? null;
+                                const soldOut = storage === 0;
                                 const lowStock = storage === 1;
                                 return (
                                   <li
@@ -537,14 +569,26 @@ export default function StaffQrBoard() {
                                       ·
                                     </span>
                                     <span className="min-w-0 flex-1">
-                                      <span className="font-medium text-gray-700">
+                                      <span
+                                        className={[
+                                          "font-medium",
+                                          soldOut
+                                            ? "text-red-700 line-through"
+                                            : "text-gray-700",
+                                        ].join(" ")}
+                                      >
                                         {item.productName}
                                       </span>
                                       <span className="text-gray-400">
                                         {" "}
                                         ({item.quantity}개)
                                       </span>
-                                      {lowStock && (
+                                      {soldOut && (
+                                        <span className="ml-1.5 inline-flex align-middle rounded bg-red-600 px-1.5 py-0.5 text-[10px] font-bold text-white">
+                                          🚨 방금 품절됨
+                                        </span>
+                                      )}
+                                      {!soldOut && lowStock && (
                                         <span className="ml-1.5 inline-flex align-middle rounded bg-red-100 px-1.5 py-0.5 text-[10px] font-bold text-red-600">
                                           🚨 재고 1개
                                         </span>
@@ -559,15 +603,22 @@ export default function StaffQrBoard() {
                               아직 담은 제품이 없습니다
                             </p>
                           )}
+                          {hasSoldOut && phase === "shopping" && (
+                            <p className="mt-2 text-[11px] font-semibold text-red-600">
+                              품절 품목 삭제 후 포스기 전송 가능
+                            </p>
+                          )}
                         </div>
 
                         <div className="flex shrink-0 flex-col items-end gap-1.5">
-                          {canSend && (
+                          {phase === "shopping" &&
+                            items.length > 0 &&
+                            entry.activeOrder?.status === "shopping" && (
                             <button
                               type="button"
-                              disabled={sendingId === entry.id}
+                              disabled={!canSend || sendingId === entry.id}
                               onClick={() => void handleSendToPos(entry)}
-                              className="rounded-lg bg-sky-600 px-2.5 py-1.5 text-[11px] font-bold whitespace-nowrap text-white hover:bg-sky-500 disabled:bg-slate-300"
+                              className="rounded-lg bg-sky-600 px-2.5 py-1.5 text-[11px] font-bold whitespace-nowrap text-white hover:bg-sky-500 disabled:cursor-not-allowed disabled:bg-slate-300"
                             >
                               {sendingId === entry.id
                                 ? "전송 중…"
