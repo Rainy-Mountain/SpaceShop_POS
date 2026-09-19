@@ -5,15 +5,11 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { fetchInventoryDashboardData } from "@/lib/fetchInventory";
 import { getBrandInitialKey, KOREAN_INITIALS } from "@/lib/koreanInitial";
 import {
-  cancelPendingOrderByQueue,
-  fetchPendingQtyByProduct,
-  getAvailableQty,
-  submitCustomerOrder,
+  loadActiveOrderForQueue,
+  revertOrderToShopping,
+  syncShoppingCart,
   type CartItem,
 } from "@/lib/orderActions";
-import {
-  subscribeOrdersRealtime,
-} from "@/lib/realtimeOrders";
 import { supabase } from "@/lib/supabase";
 import type { DashboardRow } from "@/types/dashboard";
 
@@ -83,9 +79,6 @@ const COMPANY_ORDER = ["자사", "타사"];
 
 const SCROLL_ROW =
   "flex flex-nowrap gap-2 overflow-x-auto whitespace-nowrap pb-0.5 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden";
-
-const PENDING_WARN =
-  "앞선 대기자들의 주문으로 인해 품절될 수 있습니다.";
 
 function toNumber(value: unknown): number {
   if (typeof value === "number" && Number.isFinite(value)) return value;
@@ -204,13 +197,9 @@ export default function CustomerOrderBoard() {
   const queueId = searchParams.get("queue_id");
 
   const [products, setProducts] = useState<DashboardRow[]>([]);
-  const [pendingByProduct, setPendingByProduct] = useState<Map<string, number>>(
-    () => new Map()
-  );
   const [cart, setCart] = useState<CartItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [submitting, setSubmitting] = useState(false);
   const [submitted, setSubmitted] = useState(false);
   const [submittedOrderId, setSubmittedOrderId] = useState<string | null>(null);
   const [receiptItems, setReceiptItems] = useState<CartItem[]>([]);
@@ -218,6 +207,8 @@ export default function CustomerOrderBoard() {
   const [retracting, setRetracting] = useState(false);
   const [addingId, setAddingId] = useState<string | null>(null);
   const [isCartOpen, setIsCartOpen] = useState(false);
+  const [syncingCart, setSyncingCart] = useState(false);
+  const [cartSyncError, setCartSyncError] = useState<string | null>(null);
 
   const [companyFilter, setCompanyFilter] =
     useState<CompanyFilterValue>("전체");
@@ -236,6 +227,7 @@ export default function CustomerOrderBoard() {
 
   useEffect(() => {
     if (typeof window === "undefined" || !queueId) return;
+    const activeQueueId = queueId;
 
     let cancelled = false;
 
@@ -243,13 +235,29 @@ export default function CustomerOrderBoard() {
       setLoading(true);
       setError(null);
       try {
-        const [data, pending] = await Promise.all([
+        const [data, activeOrder] = await Promise.all([
           fetchInventoryDashboardData(undefined, { orderBy: "created" }),
-          fetchPendingQtyByProduct(),
+          loadActiveOrderForQueue(activeQueueId),
         ]);
         if (cancelled) return;
         setProducts(data.rows);
-        setPendingByProduct(pending);
+
+        if (activeOrder) {
+          const hydrated = activeOrder.items.map((item) => {
+            const row = data.rows.find((p) => p.id === item.productId);
+            return {
+              ...item,
+              brand: row?.brand || item.brand || "",
+              price: row?.price ?? item.price,
+            };
+          });
+          setCart(hydrated);
+          setReceiptItems(hydrated);
+          setSubmittedOrderId(activeOrder.orderId);
+          if (activeOrder.status === "pending") {
+            setSubmitted(true);
+          }
+        }
       } catch (err) {
         const message =
           err instanceof Error
@@ -288,14 +296,10 @@ export default function CustomerOrderBoard() {
           if (!productId) {
             if (timer != null) window.clearTimeout(timer);
             timer = window.setTimeout(() => {
-              void Promise.all([
-                fetchInventoryDashboardData(undefined, { orderBy: "created" }),
-                fetchPendingQtyByProduct(),
-              ])
-                .then(([data, pending]) => {
-                  setProducts(data.rows);
-                  setPendingByProduct(pending);
-                })
+              void fetchInventoryDashboardData(undefined, {
+                orderBy: "created",
+              })
+                .then((data) => setProducts(data.rows))
                 .catch(console.error);
             }, 120);
             return;
@@ -391,36 +395,40 @@ export default function CustomerOrderBoard() {
     [cart, products]
   );
 
+  async function persistCart(nextCart: CartItem[]) {
+    if (!queueId || submitted) return;
+    setSyncingCart(true);
+    setCartSyncError(null);
+    try {
+      const { orderId } = await syncShoppingCart(queueId, nextCart);
+      if (orderId) setSubmittedOrderId(orderId);
+      else if (nextCart.length === 0) setSubmittedOrderId(null);
+    } catch (err) {
+      console.error("[CustomerOrderBoard] cart sync 실패", err);
+      const message =
+        err instanceof Error ? err.message : "장바구니 동기화에 실패했습니다.";
+      setCartSyncError(message);
+    } finally {
+      setSyncingCart(false);
+    }
+  }
+
   async function handleAddToCart(row: DashboardRow) {
     if (submitted || row.storageQty === 0) return;
 
     setAddingId(row.id);
     try {
-      let pendingMap = pendingByProduct;
-      try {
-        pendingMap = await fetchPendingQtyByProduct();
-        setPendingByProduct(pendingMap);
-      } catch (err) {
-        console.error(err);
-      }
-
       const cartQty = cart.find((item) => item.productId === row.id)?.qty ?? 0;
-      const pendingQty = pendingMap.get(row.id) ?? 0;
-      const available = getAvailableQty({
-        storageQty: row.storageQty,
-        pendingQty,
-        cartQty,
-      });
-
-      if (available < 1) {
-        window.alert(PENDING_WARN);
+      // 대기 물량 체크 없이 storage > 0이면 담기 허용 (본인 수량만 storage 이하로 제한)
+      if (cartQty >= row.storageQty) {
+        window.alert("담을 수 있는 최대 수량입니다.");
         return;
       }
 
-      setCart((prev) => {
-        const existing = prev.find((item) => item.productId === row.id);
+      const nextCart = (() => {
+        const existing = cart.find((item) => item.productId === row.id);
         if (existing) {
-          return prev.map((item) =>
+          return cart.map((item) =>
             item.productId === row.id
               ? {
                   ...item,
@@ -431,7 +439,7 @@ export default function CustomerOrderBoard() {
           );
         }
         return [
-          ...prev,
+          ...cart,
           {
             productId: row.id,
             name: row.name,
@@ -440,201 +448,174 @@ export default function CustomerOrderBoard() {
             price: row.price,
           },
         ];
-      });
+      })();
+
+      setCart(nextCart);
+      await persistCart(nextCart);
     } finally {
       setAddingId(null);
     }
   }
 
   async function changeCartQty(productId: string, delta: number) {
-    if (submitted || submitting) return;
+    if (submitted) return;
 
     const item = cart.find((row) => row.productId === productId);
     if (!item) return;
 
     const nextQty = item.qty + delta;
     if (nextQty <= 0) {
-      setCart((prev) => prev.filter((row) => row.productId !== productId));
+      const nextCart = cart.filter((row) => row.productId !== productId);
+      setCart(nextCart);
+      await persistCart(nextCart);
       return;
     }
 
     if (delta > 0) {
-      let pendingMap = pendingByProduct;
-      try {
-        pendingMap = await fetchPendingQtyByProduct();
-        setPendingByProduct(pendingMap);
-      } catch (err) {
-        console.error(err);
-      }
-
       const product = products.find((p) => p.id === productId);
       const storageQty = product?.storageQty ?? 0;
-      const pendingQty = pendingMap.get(productId) ?? 0;
-      // cartQty를 현재 수량으로 두면 available = storage - pending - current
-      // 1개 더 담을 수 있는지: available >= 1
-      const available = getAvailableQty({
-        storageQty,
-        pendingQty,
-        cartQty: item.qty,
-      });
-      if (available < 1) {
-        window.alert(PENDING_WARN);
+      if (storageQty <= 0) {
+        window.alert("품절된 제품입니다.");
+        return;
+      }
+      if (nextQty > storageQty) {
+        window.alert("담을 수 있는 최대 수량입니다.");
         return;
       }
     }
 
-    setCart((prev) =>
-      prev.map((row) =>
-        row.productId === productId ? { ...row, qty: nextQty } : row
-      )
+    const nextCart = cart.map((row) =>
+      row.productId === productId ? { ...row, qty: nextQty } : row
     );
+    setCart(nextCart);
+    await persistCart(nextCart);
   }
 
-  function removeFromCart(productId: string) {
-    setCart((prev) => prev.filter((row) => row.productId !== productId));
-  }
-
-  async function handleSubmitOrder() {
-    if (!queueId || cart.length === 0 || submitting || submitted) return;
-
-    setSubmitting(true);
-    try {
-      // 제출 직전 전체 재검증
-      const pendingMap = await fetchPendingQtyByProduct();
-      setPendingByProduct(pendingMap);
-
-      for (const item of cart) {
-        const product = products.find((p) => p.id === item.productId);
-        const storageQty = product?.storageQty ?? 0;
-        const pendingQty = pendingMap.get(item.productId) ?? 0;
-        const available = getAvailableQty({
-          storageQty,
-          pendingQty,
-          cartQty: 0,
-        });
-        if (item.qty > available) {
-          window.alert(
-            `"${item.name}" — ${PENDING_WARN}`
-          );
-          setSubmitting(false);
-          return;
-        }
-      }
-
-      const { orderId } = await submitCustomerOrder({ queueId, items: cart });
-      setReceiptItems(cart);
-      setSubmittedOrderId(orderId);
-      window.alert(
-        "주문서가 포스기로 전송되었습니다! 카운터로 와주세요."
-      );
-      // 장바구니는 유지 — 주문 수정 시 이어서 편집 가능
-      setSubmitted(true);
-      setIsCartOpen(false);
-    } catch (err) {
-      console.error("[handleSubmitOrder] 제출 실패", err);
-      const message =
-        err instanceof Error
-          ? err.message
-          : typeof err === "object" &&
-              err !== null &&
-              "message" in err &&
-              typeof (err as { message: unknown }).message === "string"
-            ? (err as { message: string }).message
-            : "알 수 없는 오류";
-      window.alert(`제출 실패: ${message}`);
-    } finally {
-      setSubmitting(false);
-    }
+  async function removeFromCart(productId: string) {
+    if (submitted) return;
+    const nextCart = cart.filter((row) => row.productId !== productId);
+    setCart(nextCart);
+    await persistCart(nextCart);
   }
 
   async function handleEditOrder() {
-    if (!queueId || retracting || isPaid) return;
+    if (!queueId || retracting || isPaid || !submittedOrderId) return;
 
     const ok = window.confirm(
-      "제출한 주문서를 취소하고 장바구니를 다시 수정할까요?\n키오스크 대기열에서도 해당 주문이 사라집니다."
+      "포스기 전송을 취소하고 장바구니를 다시 수정할까요?"
     );
     if (!ok) return;
 
     setRetracting(true);
     try {
-      await cancelPendingOrderByQueue(queueId, submittedOrderId);
-      // 장바구니 유지 (비어 있으면 제출 시 스냅샷으로 복구)
+      await revertOrderToShopping(submittedOrderId);
       setCart((prev) => (prev.length > 0 ? prev : receiptItems));
       setSubmitted(false);
-      setSubmittedOrderId(null);
       setIsPaid(false);
     } catch (err) {
-      console.error("[CustomerOrderBoard] 주문 수정(취소) 실패", err);
+      console.error("[CustomerOrderBoard] 주문 수정 실패", err);
       const message =
-        err instanceof Error ? err.message : "주문 취소에 실패했습니다.";
+        err instanceof Error ? err.message : "주문 수정에 실패했습니다.";
       window.alert(`주문 수정 실패: ${message}`);
     } finally {
       setRetracting(false);
     }
   }
 
-  // 결제 대기 중 — 본인 주문 paid 실시간 감지
+  // 본인 주문 status 실시간 — shopping→pending(포스 전송), pending→paid(결제 완료)
   useEffect(() => {
     if (typeof window === "undefined") return;
-    if (!submitted || !submittedOrderId || isPaid) return;
+    if (!queueId || isPaid) return;
+    const activeQueueId = queueId;
 
     let disposed = false;
     let pollTimer: number | null = null;
 
-    const markPaidIfNeeded = (status?: string | null) => {
-      if (disposed) return;
-      if (status === "paid") setIsPaid(true);
-    };
-
-    async function checkPaidOnce() {
-      try {
-        const { data, error } = await supabase
-          .from("orders")
-          .select("status")
-          .eq("id", submittedOrderId)
-          .maybeSingle();
-        if (error) {
-          console.error("[CustomerOrderBoard] paid 폴링 실패", error);
-          return;
-        }
-        markPaidIfNeeded(data?.status ?? null);
-      } catch (err) {
-        console.error("[CustomerOrderBoard] paid 폴링 예외", err);
+    function applyStatus(status?: string | null, orderId?: string | null) {
+      if (disposed || !status) return;
+      if (orderId) setSubmittedOrderId(orderId);
+      if (status === "pending") {
+        setReceiptItems((prev) => (prev.length > 0 ? prev : cart));
+        setSubmitted(true);
+        setIsCartOpen(false);
+      }
+      if (status === "paid") {
+        setSubmitted(true);
+        setIsPaid(true);
+      }
+      if (status === "shopping") {
+        setSubmitted(false);
+        setIsPaid(false);
       }
     }
 
-    const unsubscribe = subscribeOrdersRealtime({
-      channelPrefix: `order-paid:${submittedOrderId}`,
-      orderIdFilter: submittedOrderId,
-      onChange: (payload) => {
-        const next = (payload.new ?? {}) as {
-          id?: string;
-          status?: string;
-        };
-        console.info("[CustomerOrderBoard] orders UPDATE", next);
-        if (
-          String(next.id ?? submittedOrderId) === submittedOrderId &&
-          next.status === "paid"
-        ) {
-          setIsPaid(true);
+    async function checkOnce() {
+      try {
+        const active = await loadActiveOrderForQueue(activeQueueId);
+        if (!active) return;
+        applyStatus(active.status, active.orderId);
+      } catch (err) {
+        console.error("[CustomerOrderBoard] status 폴링 실패", err);
+      }
+    }
+
+    const channel = supabase
+      .channel(
+        `order-status:${activeQueueId}:${
+          typeof crypto !== "undefined" && "randomUUID" in crypto
+            ? crypto.randomUUID()
+            : Date.now()
+        }`
+      )
+      .on(
+        "postgres_changes",
+        {
+          event: "UPDATE",
+          schema: "public",
+          table: "orders",
+          filter: `queue_id=eq.${activeQueueId}`,
+        },
+        (payload) => {
+          const next = (payload.new ?? {}) as {
+            id?: string;
+            status?: string;
+          };
+          console.info("[CustomerOrderBoard] orders UPDATE", next);
+          applyStatus(next.status, next.id ? String(next.id) : null);
         }
-      },
-    });
+      )
+      .on(
+        "postgres_changes",
+        {
+          event: "UPDATE",
+          schema: "public",
+          table: "orders",
+        },
+        (payload) => {
+          const next = (payload.new ?? {}) as {
+            id?: string;
+            queue_id?: string;
+            status?: string;
+          };
+          if (String(next.queue_id ?? "") !== activeQueueId) return;
+          applyStatus(next.status, next.id ? String(next.id) : null);
+        }
+      )
+      .subscribe();
 
-    // 이미 paid인지 즉시 1회 확인 (이벤트 놓친 경우)
-    void checkPaidOnce();
-
-    // Realtime 미설정/지연 대비 폴링 백업 (결제 완료 시 effect cleanup으로 중단)
+    void checkOnce();
     pollTimer = window.setInterval(() => {
-      void checkPaidOnce();
-    }, 2500);
+      void checkOnce();
+    }, 3000);
 
     return () => {
       disposed = true;
       if (pollTimer != null) window.clearInterval(pollTimer);
-      unsubscribe();
+      void supabase.removeChannel(channel);
     };
-  }, [submitted, submittedOrderId, isPaid]);
+    // cart는 applyStatus 스냅샷용 — 의도적으로 deps 제외
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [queueId, isPaid]);
 
   if (!queueId) {
     return (
@@ -716,12 +697,14 @@ export default function CustomerOrderBoard() {
             SpaceShop Smart Order
           </p>
           <h1 className="mt-3 text-2xl font-extrabold text-gray-900">
-            결제 대기 중
+            포스기(결제 카운터)로
+            <br />
+            이동해 주세요.
           </h1>
           <p className="mt-3 text-sm leading-relaxed text-gray-500">
-            주문서가 포스기로 전송되었습니다.
+            직원이 주문서를 포스기로 전달했습니다.
             <br />
-            카운터로 와 주세요.
+            카운터에서 결제를 진행해 주세요.
           </p>
           <div className="mt-6 inline-flex items-center gap-2 rounded-full bg-amber-50 px-3 py-1.5 text-xs font-semibold text-amber-700">
             <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-amber-500" />
@@ -976,8 +959,7 @@ export default function CustomerOrderBoard() {
                                     type="button"
                                     disabled={
                                       soldOut ||
-                                      addingId === row.id ||
-                                      submitting
+                                      addingId === row.id
                                     }
                                     onClick={() => void handleAddToCart(row)}
                                     className="rounded-lg bg-gray-900 px-3.5 py-1.5 text-xs font-semibold text-white transition hover:bg-gray-800 disabled:cursor-not-allowed disabled:bg-gray-200 disabled:text-gray-400"
@@ -1162,14 +1144,14 @@ export default function CustomerOrderBoard() {
               {formatPrice(cartTotalPrice)}
             </span>
           </div>
-          <button
-            type="button"
-            disabled={cart.length === 0 || submitting}
-            onClick={() => void handleSubmitOrder()}
-            className="flex w-full items-center justify-center rounded-2xl bg-sky-600 px-4 py-3.5 text-base font-bold text-white shadow-md transition hover:bg-sky-500 active:scale-[0.99] disabled:cursor-not-allowed disabled:bg-gray-300 disabled:shadow-none"
-          >
-            {submitting ? "제출 중…" : "주문서 제출하기"}
-          </button>
+          {cartSyncError && (
+            <p className="mb-2 text-xs text-red-600">{cartSyncError}</p>
+          )}
+          <p className="rounded-xl border border-amber-100 bg-amber-50 px-3 py-3 text-center text-sm leading-relaxed font-medium text-amber-800">
+            {syncingCart
+              ? "장바구니 동기화 중…"
+              : "선택을 마치셨다면, 직원에게 화면을 보여주세요."}
+          </p>
         </div>
       </aside>
     </main>

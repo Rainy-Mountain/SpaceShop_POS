@@ -59,11 +59,23 @@ export async function submitCustomerOrder(options: {
   queueId: string;
   items: CartItem[];
 }): Promise<{ orderId: string }> {
-  const { queueId, items } = options;
-  if (!queueId) throw new Error("대기열 정보가 없습니다.");
-  if (items.length === 0) throw new Error("장바구니가 비어 있습니다.");
+  // 하위 호환: 즉시 pending 제출 (컨시어지 플로우에서는 syncShoppingCart + sendOrderToPos 사용)
+  const { orderId } = await syncShoppingCart(options.queueId, options.items);
+  if (!orderId) throw new Error("장바구니가 비어 있습니다.");
+  await sendOrderToPos(orderId);
+  return { orderId };
+}
 
-  // 1) queues에서 손님 정보 조회 (orders NOT NULL 컬럼용)
+/**
+ * 고객 장바구니 → orders(status=shopping) + order_items 실시간 UPSERT
+ * 장바구니가 비면 shopping 주문/품목을 정리한다.
+ */
+export async function syncShoppingCart(
+  queueId: string,
+  items: CartItem[]
+): Promise<{ orderId: string | null }> {
+  if (!queueId) throw new Error("대기열 정보가 없습니다.");
+
   const { data: queue, error: queueError } = await supabase
     .from("queues")
     .select("customer_name, queue_number")
@@ -71,58 +83,191 @@ export async function submitCustomerOrder(options: {
     .maybeSingle();
 
   if (queueError) {
-    console.error("[submitCustomerOrder] queues select 실패", queueError);
-    throw queueError;
+    console.error("[syncShoppingCart] queues select 실패", queueError);
+    throw new Error(queueError.message || "대기열 조회 실패");
   }
   if (!queue) {
     throw new Error("대기열을 찾을 수 없습니다. QR로 다시 입장해 주세요.");
   }
 
-  const customerName = String(queue.customer_name ?? "").trim();
-  const queueNumber = Number(queue.queue_number);
-  if (!customerName) {
-    throw new Error("손님 성함 정보가 없습니다.");
-  }
-  if (!Number.isFinite(queueNumber)) {
-    throw new Error("순번 정보가 올바르지 않습니다.");
-  }
+  const customerName = String(queue.customer_name ?? "").trim() || "손님";
+  const queueNumber = Number(queue.queue_number) || 0;
 
-  // 2) orders INSERT (queue_id + customer_name + queue_number)
-  const { data: order, error: orderError } = await supabase
+  const { data: existing, error: existingError } = await supabase
     .from("orders")
-    .insert({
-      queue_id: queueId,
-      customer_name: customerName,
-      queue_number: queueNumber,
-      status: "pending",
-    })
-    .select("id")
-    .single();
+    .select("id, status")
+    .eq("queue_id", queueId)
+    .in("status", ["shopping", "pending"])
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
 
-  if (orderError) {
-    console.error("[submitCustomerOrder] orders insert 실패", orderError);
-    throw orderError;
+  if (existingError) {
+    console.error("[syncShoppingCart] orders select 실패", existingError);
+    throw new Error(existingError.message || "주문 조회 실패");
   }
-  if (!order?.id) throw new Error("주문서 생성에 실패했습니다.");
 
-  const payload = items.map((item) => ({
-    order_id: order.id,
-    product_id: item.productId,
-    quantity: item.qty,
-    product_name: item.name,
+  // 이미 포스기로 넘긴(pending) 주문은 고객이 장바구니를 바꾸지 않음
+  if (existing?.status === "pending") {
+    return { orderId: String(existing.id) };
+  }
+
+  const normalized = items
+    .filter((item) => item.productId && item.qty > 0)
+    .map((item) => ({
+      productId: item.productId,
+      name: item.name,
+      qty: item.qty,
+    }));
+
+  if (normalized.length === 0) {
+    if (existing?.id) {
+      const { error: deleteError } = await supabase
+        .from("orders")
+        .delete()
+        .eq("id", existing.id)
+        .eq("status", "shopping");
+      if (deleteError) {
+        console.error("[syncShoppingCart] 빈 장바구니 주문 삭제 실패", deleteError);
+        throw new Error(deleteError.message || "주문 삭제 실패");
+      }
+    }
+    return { orderId: null };
+  }
+
+  let orderId = existing?.id ? String(existing.id) : null;
+
+  if (!orderId) {
+    const { data: created, error: createError } = await supabase
+      .from("orders")
+      .insert({
+        queue_id: queueId,
+        customer_name: customerName,
+        queue_number: queueNumber,
+        status: "shopping",
+      })
+      .select("id")
+      .single();
+
+    if (createError) {
+      console.error("[syncShoppingCart] orders insert 실패", createError);
+      throw new Error(createError.message || "주문 생성 실패");
+    }
+    orderId = String(created.id);
+  }
+
+  // 전체 교체 방식 (단순·일관) — 기존 품목 삭제 후 재삽입
+  const { error: clearError } = await supabase
+    .from("order_items")
+    .delete()
+    .eq("order_id", orderId);
+
+  if (clearError) {
+    console.error("[syncShoppingCart] order_items clear 실패", clearError);
+    throw new Error(clearError.message || "품목 동기화 실패");
+  }
+
+  const { error: insertError } = await supabase.from("order_items").insert(
+    normalized.map((item) => ({
+      order_id: orderId,
+      product_id: item.productId,
+      quantity: item.qty,
+      product_name: item.name,
+    }))
+  );
+
+  if (insertError) {
+    console.error("[syncShoppingCart] order_items insert 실패", insertError);
+    throw new Error(insertError.message || "품목 저장 실패");
+  }
+
+  return { orderId };
+}
+
+/** 직원이 포스기로 넘기기: shopping → pending */
+export async function sendOrderToPos(orderId: string): Promise<void> {
+  if (!orderId) throw new Error("주문 ID가 없습니다.");
+
+  const { data, error } = await supabase
+    .from("orders")
+    .update({ status: "pending" })
+    .eq("id", orderId)
+    .eq("status", "shopping")
+    .select("id")
+    .maybeSingle();
+
+  if (error) {
+    console.error("[sendOrderToPos] 실패", error);
+    throw new Error(error.message || "포스기 전송에 실패했습니다.");
+  }
+  if (!data) {
+    throw new Error("쇼핑 중 주문을 찾을 수 없거나 이미 전송되었습니다.");
+  }
+}
+
+/** pending → shopping 복귀 (고객 주문 수정) */
+export async function revertOrderToShopping(orderId: string): Promise<void> {
+  if (!orderId) throw new Error("주문 ID가 없습니다.");
+
+  const { data, error } = await supabase
+    .from("orders")
+    .update({ status: "shopping" })
+    .eq("id", orderId)
+    .eq("status", "pending")
+    .select("id")
+    .maybeSingle();
+
+  if (error) {
+    console.error("[revertOrderToShopping] 실패", error);
+    throw new Error(error.message || "주문 수정 모드 전환에 실패했습니다.");
+  }
+  if (!data) {
+    throw new Error("결제 대기 주문을 찾을 수 없습니다.");
+  }
+}
+
+/** 대기열의 활성 주문(shopping | pending) + 품목 로드 */
+export async function loadActiveOrderForQueue(queueId: string): Promise<{
+  orderId: string;
+  status: string;
+  items: CartItem[];
+} | null> {
+  if (!queueId) return null;
+
+  const { data, error } = await supabase
+    .from("orders")
+    .select(
+      `
+      id,
+      status,
+      order_items ( product_id, quantity, product_name )
+    `
+    )
+    .eq("queue_id", queueId)
+    .in("status", ["shopping", "pending"])
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  if (error) {
+    console.error("[loadActiveOrderForQueue] 실패", error);
+    throw new Error(error.message || "주문 조회 실패");
+  }
+  if (!data) return null;
+
+  const itemsRaw = Array.isArray(data.order_items) ? data.order_items : [];
+  const items: CartItem[] = itemsRaw.map((item) => ({
+    productId: String(item.product_id),
+    name: String(item.product_name ?? "제품"),
+    brand: "",
+    qty: Number(item.quantity) || 0,
   }));
 
-  const { error: itemsError } = await supabase
-    .from("order_items")
-    .insert(payload);
-
-  if (itemsError) {
-    console.error("[submitCustomerOrder] order_items insert 실패", itemsError);
-    await supabase.from("orders").delete().eq("id", order.id);
-    throw itemsError;
-  }
-
-  return { orderId: order.id as string };
+  return {
+    orderId: String(data.id),
+    status: String(data.status),
+    items: items.filter((item) => item.qty > 0),
+  };
 }
 
 export type PendingPosOrderItem = {

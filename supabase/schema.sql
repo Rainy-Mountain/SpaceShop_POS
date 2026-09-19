@@ -58,10 +58,16 @@ create table if not exists orders (
   queue_id uuid not null references queues(id) on delete cascade,
   customer_name text not null,
   queue_number integer not null,
-  status text not null default 'pending'
-    check (status in ('pending', 'paid', 'cancelled', 'completed')),
+  status text not null default 'shopping'
+    check (status in ('shopping', 'pending', 'paid', 'cancelled', 'completed')),
   created_at timestamptz not null default now()
 );
+
+-- 기존 DB: shopping 상태 허용 (1회 실행)
+-- alter table orders drop constraint if exists orders_status_check;
+-- alter table orders add constraint orders_status_check
+--   check (status in ('shopping', 'pending', 'paid', 'cancelled', 'completed'));
+-- alter table orders alter column status set default 'shopping';
 
 -- 기존 orders에 컬럼이 없다면 실행
 -- alter table orders add column if not exists customer_name text;
