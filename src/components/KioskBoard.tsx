@@ -808,6 +808,7 @@ export default function KioskBoard() {
             productId: item.id,
             quantity: item.qty,
             unitPrice: item.price,
+            productName: item.name,
           })),
         });
 

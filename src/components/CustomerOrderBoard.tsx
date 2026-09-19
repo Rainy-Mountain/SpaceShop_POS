@@ -80,6 +80,63 @@ const COMPANY_ORDER = ["자사", "타사"];
 const SCROLL_ROW =
   "flex flex-nowrap gap-2 overflow-x-auto whitespace-nowrap pb-0.5 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden";
 
+function cartStorageKey(queueId: string): string {
+  return `spaceshop:order-cart:${queueId}`;
+}
+
+function readCartFromStorage(queueId: string): CartItem[] | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const raw = window.localStorage.getItem(cartStorageKey(queueId));
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as unknown;
+    if (!Array.isArray(parsed)) return null;
+    const items: CartItem[] = parsed
+      .map((row) => {
+        const item = row as Partial<CartItem>;
+        const productId = String(item.productId ?? "").trim();
+        const qty = Number(item.qty) || 0;
+        if (!productId || qty <= 0) return null;
+        return {
+          productId,
+          name: String(item.name ?? "제품"),
+          brand: String(item.brand ?? ""),
+          qty,
+          price:
+            typeof item.price === "number" && Number.isFinite(item.price)
+              ? item.price
+              : undefined,
+        };
+      })
+      .filter((item): item is CartItem => item != null);
+    return items;
+  } catch {
+    return null;
+  }
+}
+
+function writeCartToStorage(queueId: string, items: CartItem[]): void {
+  if (typeof window === "undefined") return;
+  try {
+    if (items.length === 0) {
+      window.localStorage.removeItem(cartStorageKey(queueId));
+      return;
+    }
+    window.localStorage.setItem(cartStorageKey(queueId), JSON.stringify(items));
+  } catch (err) {
+    console.warn("[CustomerOrderBoard] localStorage 저장 실패", err);
+  }
+}
+
+function clearCartStorage(queueId: string): void {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.removeItem(cartStorageKey(queueId));
+  } catch {
+    /* ignore */
+  }
+}
+
 function toNumber(value: unknown): number {
   if (typeof value === "number" && Number.isFinite(value)) return value;
   if (typeof value === "string") {
@@ -234,6 +291,13 @@ export default function CustomerOrderBoard() {
     async function load() {
       setLoading(true);
       setError(null);
+
+      // 1) localStorage 즉시 복구 (새로고침 체감 개선)
+      const cached = readCartFromStorage(activeQueueId);
+      if (cached && cached.length > 0) {
+        setCart(cached);
+      }
+
       try {
         const [data, activeOrder] = await Promise.all([
           fetchInventoryDashboardData(undefined, { orderBy: "created" }),
@@ -243,20 +307,74 @@ export default function CustomerOrderBoard() {
         setProducts(data.rows);
 
         if (activeOrder) {
+          // 2) DB(shopping/pending)가 있으면 최종 소스로 덮어씀
           const hydrated = activeOrder.items.map((item) => {
             const row = data.rows.find((p) => p.id === item.productId);
             return {
               ...item,
               brand: row?.brand || item.brand || "",
+              name: row?.name || item.name,
               price: row?.price ?? item.price,
             };
           });
-          setCart(hydrated);
-          setReceiptItems(hydrated);
+
+          if (hydrated.length === 0 && cached && cached.length > 0) {
+            // DB 품목이 비어 있고 캐시만 있으면 캐시 유지 + shopping 재동기화
+            const hydratedCache = cached.map((item) => {
+              const row = data.rows.find((p) => p.id === item.productId);
+              return {
+                ...item,
+                brand: row?.brand || item.brand || "",
+                name: row?.name || item.name,
+                price: row?.price ?? item.price,
+              };
+            });
+            setCart(hydratedCache);
+            writeCartToStorage(activeQueueId, hydratedCache);
+            if (activeOrder.status === "shopping") {
+              void syncShoppingCart(activeQueueId, hydratedCache)
+                .then(({ orderId }) => {
+                  if (orderId) setSubmittedOrderId(orderId);
+                })
+                .catch(console.error);
+            }
+          } else {
+            setCart(hydrated);
+            setReceiptItems(hydrated);
+            writeCartToStorage(activeQueueId, hydrated);
+          }
+
           setSubmittedOrderId(activeOrder.orderId);
           if (activeOrder.status === "pending") {
             setSubmitted(true);
+            setReceiptItems((prev) =>
+              prev.length > 0
+                ? prev
+                : hydrated.length > 0
+                  ? hydrated
+                  : (cached ?? [])
+            );
           }
+        } else if (cached && cached.length > 0) {
+          // 3) DB에 주문 없고 캐시만 있으면 shopping 주문으로 재동기화
+          const hydratedCache = cached.map((item) => {
+            const row = data.rows.find((p) => p.id === item.productId);
+            return {
+              ...item,
+              brand: row?.brand || item.brand || "",
+              name: row?.name || item.name,
+              price: row?.price ?? item.price,
+            };
+          });
+          setCart(hydratedCache);
+          void syncShoppingCart(activeQueueId, hydratedCache)
+            .then(({ orderId }) => {
+              if (orderId) setSubmittedOrderId(orderId);
+            })
+            .catch(console.error);
+        } else {
+          setCart([]);
+          clearCartStorage(activeQueueId);
         }
       } catch (err) {
         const message =
@@ -265,6 +383,7 @@ export default function CustomerOrderBoard() {
             : "제품 목록을 불러오지 못했습니다.";
         console.error(err);
         if (!cancelled) setError(message);
+        // DB 실패해도 localStorage 캐시는 유지
       } finally {
         if (!cancelled) setLoading(false);
       }
@@ -397,6 +516,7 @@ export default function CustomerOrderBoard() {
 
   async function persistCart(nextCart: CartItem[]) {
     if (!queueId || submitted) return;
+    writeCartToStorage(queueId, nextCart);
     setSyncingCart(true);
     setCartSyncError(null);
     try {
@@ -542,6 +662,7 @@ export default function CustomerOrderBoard() {
       if (status === "paid") {
         setSubmitted(true);
         setIsPaid(true);
+        clearCartStorage(activeQueueId);
       }
       if (status === "shopping") {
         setSubmitted(false);
@@ -771,7 +892,7 @@ export default function CustomerOrderBoard() {
             value={searchTerm}
             onChange={(event) => setSearchTerm(event.target.value)}
             placeholder="제품명 또는 브랜드명 검색"
-            className="w-full rounded-full border border-gray-200 bg-white py-1.5 pr-9 pl-9 text-sm text-gray-900 outline-none placeholder:text-gray-400 focus:border-gray-900"
+            className="w-full rounded-full border border-gray-200 bg-white py-2 pr-9 pl-9 text-base text-gray-900 outline-none placeholder:text-gray-400 focus:border-gray-900"
           />
         </div>
 

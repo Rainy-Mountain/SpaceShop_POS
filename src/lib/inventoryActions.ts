@@ -189,13 +189,22 @@ export async function registerSale(params: {
 
   if (current[field] < quantity) {
     throw new Error(
-      `${LOCATION_LABELS[soldFrom]} 재고가 부족합니다. (현재 ${current[field]}개)`
+      `재고가 부족하여 결제를 진행할 수 없습니다. (품목: ${productId}, 남은 재고: ${current[field]}개)`
     );
   }
 
   const totalPrice = unitPrice * quantity;
   const nextQty = current[field] - quantity;
 
+  // 1) 재고 차감 먼저 — 실패 시 매출 기록 없음
+  await updateInventoryQtys(productId, {
+    backup_qty: current.backup_qty,
+    storage_qty: current.storage_qty,
+    display_qty: current.display_qty,
+    [field]: nextQty,
+  });
+
+  // 2) 매출 기록
   const { error: saleError } = await supabase.from("sales_logs").insert({
     product_id: productId,
     day_number: dayNumber,
@@ -204,29 +213,25 @@ export async function registerSale(params: {
     total_price: totalPrice,
   });
 
-  if (saleError) throw new Error(saleError.message);
-
-  try {
-    await updateInventoryQtys(productId, {
-      backup_qty: current.backup_qty,
-      storage_qty: current.storage_qty,
-      display_qty: current.display_qty,
-      [field]: nextQty,
-    });
-  } catch (error) {
-    const message =
-      error instanceof Error ? error.message : "재고 차감에 실패했습니다.";
-    throw new Error(`판매 기록은 저장됐지만 재고 차감에 실패했습니다: ${message}`);
+  if (saleError) {
+    // 재고는 이미 차감됨 — 복구 시도
+    try {
+      await updateInventoryQtys(productId, current);
+    } catch (rollbackError) {
+      console.error("[registerSale] 매출 실패 후 재고 롤백 실패", rollbackError);
+    }
+    throw new Error(saleError.message);
   }
 }
 
-/** 키오스크 장바구니 일괄 결제 (샵 재고에서 차감) */
+/** 키오스크 장바구니 일괄 결제 (샵 재고에서 차감) — 사전 재고 검증 포함 */
 export async function checkoutKioskCart(params: {
   dayNumber: number;
   items: Array<{
     productId: string;
     quantity: number;
     unitPrice: number;
+    productName?: string;
   }>;
 }): Promise<void> {
   const { dayNumber, items } = params;
@@ -241,17 +246,83 @@ export async function checkoutKioskCart(params: {
     }
   }
 
-  await Promise.all(
-    items.map((item) =>
-      registerSale({
-        productId: item.productId,
-        dayNumber,
-        soldFrom: "창고",
+  // 동일 product_id 합산
+  const merged = new Map<
+    string,
+    { quantity: number; unitPrice: number; productName?: string }
+  >();
+  for (const item of items) {
+    const prev = merged.get(item.productId);
+    if (prev) {
+      prev.quantity += item.quantity;
+    } else {
+      merged.set(item.productId, {
         quantity: item.quantity,
         unitPrice: item.unitPrice,
-      })
-    )
+        productName: item.productName,
+      });
+    }
+  }
+
+  const productIds = [...merged.keys()];
+
+  // 0) 사전 재고 검증 — 부족 시 매출 INSERT 절대 실행 안 함
+  const [{ data: productRows, error: productsError }, { data: inventoryRows, error: inventoryError }] =
+    await Promise.all([
+      supabase.from("products").select("id, name").in("id", productIds),
+      supabase
+        .from("inventory")
+        .select("product_id, storage_qty")
+        .in("product_id", productIds),
+    ]);
+
+  if (productsError) {
+    throw new Error(productsError.message || "제품 정보 조회에 실패했습니다.");
+  }
+  if (inventoryError) {
+    throw new Error(inventoryError.message || "재고 정보 조회에 실패했습니다.");
+  }
+
+  const nameById = new Map(
+    (productRows ?? []).map((row) => [
+      String(row.id),
+      String(row.name ?? "제품"),
+    ])
   );
+  const storageById = new Map(
+    (inventoryRows ?? []).map((row) => [
+      String(row.product_id),
+      Number(row.storage_qty) || 0,
+    ])
+  );
+
+  for (const [productId, entry] of merged) {
+    const productName =
+      entry.productName || nameById.get(productId) || "제품";
+    const storageQty = storageById.has(productId)
+      ? (storageById.get(productId) as number)
+      : null;
+
+    if (storageQty == null) {
+      throw new Error(`"${productName}" 재고 정보를 찾을 수 없습니다.`);
+    }
+    if (storageQty < entry.quantity) {
+      throw new Error(
+        `재고가 부족하여 결제를 진행할 수 없습니다. (품목: ${productName}, 남은 재고: ${storageQty}개)`
+      );
+    }
+  }
+
+  // 검증 통과 후에만 순차 결제 (재고 차감 + 매출)
+  for (const [productId, entry] of merged) {
+    await registerSale({
+      productId,
+      dayNumber,
+      soldFrom: "창고",
+      quantity: entry.quantity,
+      unitPrice: entry.unitPrice,
+    });
+  }
 }
 
 export async function fetchRecentActivities(
