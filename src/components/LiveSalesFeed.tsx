@@ -159,21 +159,23 @@ export default function LiveSalesFeed() {
                     {sale.productName}
                   </p>
                 </div>
-                <p className="shrink-0 text-base font-bold tabular-nums text-slate-900">
-                  {sale.quantity}
-                  <span className="ml-0.5 text-xs font-semibold text-slate-500">
-                    개
-                  </span>
-                </p>
-                <button
-                  type="button"
-                  disabled={cancellingId !== null}
-                  onClick={() => void handleCancelSale(sale)}
-                  className="shrink-0 rounded border border-red-200 px-2 py-1 text-[10px] font-medium text-red-500 transition hover:border-red-300 hover:bg-red-50 hover:text-red-700 disabled:opacity-40"
-                  title="결제 취소 · 재고 원복"
-                >
-                  {isCancelling ? "취소 중…" : "↩️ 결제 취소"}
-                </button>
+                <div className="flex shrink-0 items-center gap-2.5">
+                  <p className="text-base font-bold tabular-nums text-slate-900">
+                    {sale.quantity}
+                    <span className="ml-0.5 text-xs font-semibold text-slate-500">
+                      개
+                    </span>
+                  </p>
+                  <button
+                    type="button"
+                    disabled={cancellingId !== null}
+                    onClick={() => void handleCancelSale(sale)}
+                    className="rounded-md border border-gray-200 bg-gray-50 px-3 py-1.5 text-xs font-medium text-gray-400 transition-all duration-200 hover:border-red-200 hover:bg-red-50 hover:text-red-600 disabled:opacity-40"
+                    title="결제 취소 · 재고 원복"
+                  >
+                    {isCancelling ? "취소 중…" : "결제 취소"}
+                  </button>
+                </div>
               </li>
             );
           })}
