@@ -6,7 +6,7 @@ const StaffQrBoard = dynamic(() => import("@/components/StaffQrBoard"), {
   ssr: false,
   loading: () => (
     <div className="flex min-h-screen items-center justify-center bg-gray-50 text-sm text-gray-500">
-      QR 코드 불러오는 중…
+      스마트 컨시어지 불러오는 중…
     </div>
   ),
 });

@@ -4,8 +4,8 @@ export const dynamic = "force-dynamic";
 export const revalidate = 0;
 
 export const metadata: Metadata = {
-  title: "손님 안내용 QR | SpaceShop",
-  description: "스마트 오더 대기열 등록 QR 코드",
+  title: "스마트 컨시어지 | SpaceShop",
+  description: "현장 오더 현황 · 손님 안내 QR",
 };
 
 export default function StaffQrLayout({

@@ -167,7 +167,7 @@ export default function StaffQrBoard() {
 
   const qrSrc = useMemo(() => {
     if (!joinUrl) return "";
-    return `https://api.qrserver.com/v1/create-qr-code/?size=400x400&data=${encodeURIComponent(joinUrl)}`;
+    return `https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(joinUrl)}`;
   }, [joinUrl]);
 
   const loadStorageMap = useCallback(async () => {
@@ -426,54 +426,53 @@ export default function StaffQrBoard() {
   }
 
   return (
-    <main className="mx-auto min-h-[calc(100vh-4.5rem)] w-full max-w-5xl px-4 py-8 sm:px-6">
-      <header className="mb-8 flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
-        <div className="text-center sm:text-left">
-          <p className="text-sm font-medium tracking-wide text-sky-600">
-            SpaceShop Staff
-          </p>
-          <h1 className="mt-1 text-2xl font-extrabold tracking-tight text-gray-900 sm:text-3xl">
-            손님 안내용 QR 코드
-          </h1>
-          <p className="mt-2 text-sm text-gray-500">
-            장바구니를 확인한 뒤 포스기로 넘겨 주세요.
-          </p>
-        </div>
-        <button
-          type="button"
-          disabled={clearingAll}
-          onClick={() => void handleClearAll()}
-          className="shrink-0 self-center rounded-lg border border-red-200 px-3 py-1.5 text-xs font-medium text-red-500 transition hover:bg-red-50 disabled:opacity-50 sm:self-start"
-        >
-          {clearingAll ? "초기화 중…" : "테스트 데이터 전체 초기화"}
-        </button>
+    <main className="relative mx-auto flex min-h-[calc(100vh-4.5rem)] w-full max-w-7xl flex-col px-4 py-5 sm:px-6 lg:px-8">
+      <header className="mb-5 shrink-0">
+        <p className="text-sm font-medium tracking-wide text-sky-600">
+          SpaceShop Staff
+        </p>
+        <h1 className="mt-1 text-2xl font-extrabold tracking-tight text-gray-900 sm:text-3xl">
+          스마트 컨시어지
+        </h1>
+        <p className="mt-1.5 text-sm text-gray-500">
+          장바구니를 확인한 뒤 포스기로 넘겨 주세요.
+        </p>
       </header>
 
-      <div className="grid gap-8 lg:grid-cols-2 lg:items-start">
-        <section className="rounded-2xl border border-gray-200 bg-white p-5 shadow-sm sm:p-6">
-          <div className="mx-auto flex aspect-square w-full max-w-[400px] items-center justify-center">
-            {qrSrc ? (
-              // eslint-disable-next-line @next/next/no-img-element
-              <img
-                src={qrSrc}
-                alt="대기열 등록 QR 코드"
-                width={400}
-                height={400}
-                className="h-full w-full object-contain"
-              />
-            ) : (
-              <div className="h-48 w-48 animate-pulse rounded-xl bg-gray-100" />
-            )}
-          </div>
-          {joinUrl && (
-            <p className="mt-4 break-all text-center text-xs text-gray-400">
-              {joinUrl}
+      <div className="flex min-h-0 flex-1 flex-col gap-6 lg:flex-row lg:gap-8">
+        {/* 좌측: 안내 + 소형 QR */}
+        <aside className="flex w-full shrink-0 flex-col gap-4 lg:w-56 xl:w-64">
+          <section className="rounded-2xl border border-gray-200 bg-white p-4 shadow-sm">
+            <p className="text-center text-xs leading-relaxed text-gray-500">
+              스마트폰 카메라로 스캔하여
+              <br />
+              대기열에 등록해 주세요.
             </p>
-          )}
-        </section>
+            <div className="mx-auto mt-3 flex h-[200px] w-[200px] items-center justify-center">
+              {qrSrc ? (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img
+                  src={qrSrc}
+                  alt="대기열 등록 QR 코드"
+                  width={200}
+                  height={200}
+                  className="h-[200px] w-[200px] object-contain"
+                />
+              ) : (
+                <div className="h-full w-full animate-pulse rounded-xl bg-gray-100" />
+              )}
+            </div>
+            {joinUrl && (
+              <p className="mt-3 break-all text-center text-[10px] leading-snug text-gray-300">
+                {joinUrl}
+              </p>
+            )}
+          </section>
+        </aside>
 
-        <section className="rounded-2xl border border-gray-200 bg-white shadow-sm">
-          <div className="flex items-center justify-between border-b border-gray-100 px-5 py-4">
+        {/* 우측: 실시간 장바구니 현황 (넓은 영역 + 독립 스크롤) */}
+        <section className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-2xl border border-gray-200 bg-white shadow-sm lg:min-h-[calc(100vh-12rem)]">
+          <div className="flex shrink-0 items-center justify-between border-b border-gray-100 px-5 py-3.5">
             <div>
               <h2 className="text-base font-bold text-gray-900">
                 실시간 장바구니 현황
@@ -488,7 +487,7 @@ export default function StaffQrBoard() {
             </span>
           </div>
 
-          <div className="max-h-[min(36rem,65vh)] overflow-y-auto px-3 py-3 sm:px-4">
+          <div className="min-h-0 flex-1 overflow-y-auto px-3 py-3 sm:px-4">
             {listError && (
               <p className="mb-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
                 {listError}
@@ -505,7 +504,7 @@ export default function StaffQrBoard() {
                 ))}
               </div>
             ) : entries.length === 0 ? (
-              <p className="py-12 text-center text-sm text-gray-400">
+              <p className="py-16 text-center text-sm text-gray-400">
                 아직 등록된 손님이 없습니다
               </p>
             ) : (
@@ -562,7 +561,10 @@ export default function StaffQrBoard() {
                                 const lowStock = storage === 1;
                                 return (
                                   <li
-                                    key={item.id || `${item.productId}-${item.productName}`}
+                                    key={
+                                      item.id ||
+                                      `${item.productId}-${item.productName}`
+                                    }
                                     className="flex items-start gap-1.5 text-xs leading-snug text-gray-600"
                                   >
                                     <span className="mt-0.5 text-gray-300">
@@ -610,26 +612,26 @@ export default function StaffQrBoard() {
                           )}
                         </div>
 
-                        <div className="flex shrink-0 flex-col items-end gap-1.5">
+                        <div className="flex shrink-0 flex-col items-end gap-2">
                           {phase === "shopping" &&
                             items.length > 0 &&
                             entry.activeOrder?.status === "shopping" && (
-                            <button
-                              type="button"
-                              disabled={!canSend || sendingId === entry.id}
-                              onClick={() => void handleSendToPos(entry)}
-                              className="rounded-lg bg-sky-600 px-2.5 py-1.5 text-[11px] font-bold whitespace-nowrap text-white hover:bg-sky-500 disabled:cursor-not-allowed disabled:bg-slate-300"
-                            >
-                              {sendingId === entry.id
-                                ? "전송 중…"
-                                : "포스기로 넘기기"}
-                            </button>
-                          )}
+                              <button
+                                type="button"
+                                disabled={!canSend || sendingId === entry.id}
+                                onClick={() => void handleSendToPos(entry)}
+                                className="rounded-lg bg-sky-600 px-2.5 py-1.5 text-[11px] font-bold whitespace-nowrap text-white hover:bg-sky-500 disabled:cursor-not-allowed disabled:bg-slate-300"
+                              >
+                                {sendingId === entry.id
+                                  ? "전송 중…"
+                                  : "포스기로 넘기기"}
+                              </button>
+                            )}
                           <button
                             type="button"
                             disabled={deletingId === entry.id}
                             onClick={() => void handleDeleteEntry(entry)}
-                            className="flex h-8 w-8 items-center justify-center rounded-lg text-gray-400 transition hover:bg-red-50 hover:text-red-500 disabled:opacity-40"
+                            className="flex h-6 w-6 items-center justify-center rounded text-gray-300 transition hover:text-gray-400 disabled:opacity-30"
                             aria-label={`${entry.customerName} 대기열 삭제`}
                             title="삭제"
                           >
@@ -637,7 +639,7 @@ export default function StaffQrBoard() {
                               xmlns="http://www.w3.org/2000/svg"
                               viewBox="0 0 24 24"
                               fill="currentColor"
-                              className="h-4 w-4"
+                              className="h-3.5 w-3.5"
                               aria-hidden
                             >
                               <path
@@ -657,6 +659,17 @@ export default function StaffQrBoard() {
           </div>
         </section>
       </div>
+
+      {/* 테스트 초기화 — 우측 하단 구석, 거의 보이지 않게 */}
+      <button
+        type="button"
+        disabled={clearingAll}
+        onClick={() => void handleClearAll()}
+        className="fixed right-3 bottom-3 z-10 px-1 py-0.5 text-[10px] font-normal text-gray-300 transition hover:text-gray-400 disabled:opacity-40"
+        title="테스트 데이터 전체 초기화"
+      >
+        {clearingAll ? "…" : "테스트 초기화"}
+      </button>
     </main>
   );
 }

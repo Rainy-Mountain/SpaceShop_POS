@@ -9,7 +9,7 @@ import type { EventDay } from "@/types/dashboard";
 const LINKS = [
   { href: "/", label: "엑셀 업로드" },
   { href: "/inventory", label: "재고 현황판" },
-  { href: "/staff/qr", label: "손님 QR" },
+  { href: "/staff/qr", label: "스마트 컨시어지" },
   { href: "/kiosk", label: "키오스크" },
   { href: "/sales-feed", label: "실시간 판매 기록" },
   { href: "/replenish", label: "물류 보충" },
