@@ -167,3 +167,67 @@ export async function uploadExcelRows(
 
   return summary;
 }
+
+export type ManualProductInput = {
+  name: string;
+  price: number;
+  storageQty: number;
+  backupQty: number;
+};
+
+/** 단일 품목 수동 등록 — products INSERT + inventory UPSERT */
+export async function createManualProduct(
+  input: ManualProductInput
+): Promise<{ productId: string }> {
+  const name = input.name.trim();
+  if (!name) throw new Error("제품명을 입력해 주세요.");
+
+  const price = Number(input.price);
+  if (!Number.isFinite(price) || price < 0) {
+    throw new Error("판매 가격은 0 이상의 숫자여야 합니다.");
+  }
+
+  const storageQty = Number.isFinite(input.storageQty)
+    ? Math.max(0, Math.floor(input.storageQty))
+    : 0;
+  const backupQty = Number.isFinite(input.backupQty)
+    ? Math.max(0, Math.floor(input.backupQty))
+    : 0;
+
+  const { data: existing, error: findError } = await supabase
+    .from("products")
+    .select("id")
+    .eq("name", name)
+    .maybeSingle();
+
+  if (findError) throw new Error(findError.message);
+  if (existing?.id) {
+    throw new Error("이미 같은 제품명이 등록되어 있습니다.");
+  }
+
+  const { data: created, error: insertError } = await supabase
+    .from("products")
+    .insert({
+      brand: "미지정",
+      name,
+      company_type: "자사",
+      price,
+    })
+    .select("id")
+    .single();
+
+  if (insertError) throw new Error(insertError.message || "제품 등록 실패");
+  if (!created?.id) throw new Error("제품 등록에 실패했습니다.");
+
+  await upsertInventory(created.id, {
+    brand: "미지정",
+    name,
+    companyType: "자사",
+    price,
+    backupQty,
+    storageQty,
+    displayQty: 0,
+  });
+
+  return { productId: String(created.id) };
+}

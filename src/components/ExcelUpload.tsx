@@ -136,7 +136,7 @@ export default function ExcelUpload() {
       : 0;
 
   return (
-    <div className="mx-auto w-full max-w-2xl">
+    <div className="w-full">
       <div
         role="button"
         tabIndex={0}

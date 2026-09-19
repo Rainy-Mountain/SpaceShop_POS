@@ -7,7 +7,7 @@ import { useEventDay } from "@/hooks/useEventDay";
 import type { EventDay } from "@/types/dashboard";
 
 const LINKS = [
-  { href: "/", label: "엑셀 업로드" },
+  { href: "/", label: "재고 등록" },
   { href: "/inventory", label: "재고 현황판" },
   { href: "/staff/qr", label: "스마트 컨시어지" },
   { href: "/kiosk", label: "키오스크" },
