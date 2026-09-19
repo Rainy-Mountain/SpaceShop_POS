@@ -22,12 +22,11 @@ function formatCurrency(value: number): string {
   return `${Number(value || 0).toLocaleString("ko-KR")}원`;
 }
 
-/** queues?.customer_name 있으면 순번+폰, 없으면 워크인 */
+/** queues?.customer_name 있으면 순번+폰, 없으면 null (표기 생략) */
 function formatGuestLabel(group: {
   customerName?: string | null;
   queueNumber?: number | null;
-}): string {
-  // order.queues?.customer_name 매핑값
+}): string | null {
   const phone = group.customerName?.trim() ?? "";
   const hasPhone =
     Boolean(phone) &&
@@ -37,18 +36,11 @@ function formatGuestLabel(group: {
     phone !== "워크인";
 
   if (!hasPhone) {
-    return "워크인";
+    return null;
   }
 
   const queueNumber = group.queueNumber ?? 0;
   return `[순번: ${queueNumber}번] ${phone}님`;
-}
-
-function isWalkInGuest(group: {
-  customerName?: string | null;
-  queueNumber?: number | null;
-}): boolean {
-  return formatGuestLabel(group) === "워크인";
 }
 
 export default function LiveSalesFeed() {
@@ -119,9 +111,9 @@ export default function LiveSalesFeed() {
 
     const label = formatGuestLabel(group);
     const ok = window.confirm(
-      isWalkInGuest(group)
-        ? "이 워크인 결제 건 전체를 취소하시겠습니까?\n(취소 시 판매 기록에서 삭제되며 재고가 다시 복구됩니다.)"
-        : `${label}의 주문 전체를 취소하시겠습니까?\n(취소 시 판매 기록에서 삭제되며 재고가 다시 복구됩니다.)`
+      label
+        ? `${label}의 주문 전체를 취소하시겠습니까?\n(취소 시 판매 기록에서 삭제되며 재고가 다시 복구됩니다.)`
+        : "이 결제 건 전체를 취소하시겠습니까?\n(취소 시 판매 기록에서 삭제되며 재고가 다시 복구됩니다.)"
     );
     if (!ok) return;
 
@@ -230,19 +222,22 @@ export default function LiveSalesFeed() {
         <ul className="space-y-3">
           {groups.map((group) => {
             const isCancellingGroup = cancellingGroupKey === group.groupKey;
+            const guestLabel = formatGuestLabel(group);
             return (
               <li
                 key={group.groupKey}
                 className="rounded-2xl border border-slate-200 bg-white px-4 py-3.5 shadow-sm sm:px-5"
               >
                 <div className="flex items-start justify-between gap-3">
-                  <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+                  <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1">
                     <time className="text-sm font-bold tabular-nums text-sky-700">
                       {formatTime(group.createdAt)}
                     </time>
-                    <span className="text-sm font-semibold text-gray-800">
-                      {formatGuestLabel(group)}
-                    </span>
+                    {guestLabel ? (
+                      <span className="text-sm font-semibold text-gray-800">
+                        {guestLabel}
+                      </span>
+                    ) : null}
                   </div>
                   <button
                     type="button"
