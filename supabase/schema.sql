@@ -31,14 +31,29 @@ create table if not exists sales_logs (
   payment_group_id uuid,
   order_id uuid,
   queue_id uuid,
+  guest_customer_name text,
+  guest_queue_number integer,
   created_at timestamptz not null default now()
 );
 
--- 결제 건 그룹화 컬럼 (기존 DB: add_sales_payment_group.sql 실행)
--- 손님 번호·순번은 결제 시 orders에 스냅샷 저장 (queues 조인 불필요)
+-- 결제 건 그룹화 컬럼 (기존 DB: add_sales_payment_group.sql / add_guest_snapshot_and_store_settings.sql)
+-- 손님 번호·순번은 결제 시 orders + sales_logs.guest_* 스냅샷 저장 (queues 조인 불필요)
 -- alter table sales_logs add column if not exists payment_group_id uuid;
 -- alter table sales_logs add column if not exists order_id uuid;
 -- alter table sales_logs add column if not exists queue_id uuid;
+-- alter table sales_logs add column if not exists guest_customer_name text;
+-- alter table sales_logs add column if not exists guest_queue_number integer;
+
+-- 현장 설정 (자동 입장 등)
+create table if not exists store_settings (
+  id integer primary key default 1 check (id = 1),
+  auto_enter boolean not null default false,
+  updated_at timestamptz not null default now()
+);
+
+insert into store_settings (id, auto_enter)
+values (1, false)
+on conflict (id) do nothing;
 
 create table if not exists movement_logs (
   id uuid primary key default gen_random_uuid(),

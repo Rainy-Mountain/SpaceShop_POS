@@ -27,6 +27,13 @@ function isPlaceholderGuest(value: string): boolean {
   );
 }
 
+/** 폰 뒷자리로 쓸 수 있는 값인지 (4자리 숫자 우선) */
+function normalizePhoneTail(raw: unknown): string | null {
+  const value = String(raw ?? "").trim();
+  if (isPlaceholderGuest(value)) return null;
+  return value;
+}
+
 type GuestInfo = {
   customerName: string | null;
   queueNumber: number | null;
@@ -34,8 +41,8 @@ type GuestInfo = {
 };
 
 /**
- * 결제 시점 스냅샷 — orders.customer_name / queue_number 만 사용
- * (queues 조인 없음: 대기열 삭제 후에도 영수증 유지)
+ * 결제 시점 스냅샷 — orders.customer_name / queue_number
+ * (queues 조인 없음)
  */
 async function fetchGuestInfoByOrderIds(
   orderIds: string[]
@@ -54,13 +61,10 @@ async function fetchGuestInfoByOrderIds(
   }
 
   for (const row of data ?? []) {
-    const phone = String(row.customer_name ?? "").trim();
-    const customerName = isPlaceholderGuest(phone) ? null : phone;
-    const queueNumber =
-      (Number(row.queue_number) || 0) > 0 ? Number(row.queue_number) : null;
     map.set(String(row.id), {
-      customerName,
-      queueNumber,
+      customerName: normalizePhoneTail(row.customer_name),
+      queueNumber:
+        (Number(row.queue_number) || 0) > 0 ? Number(row.queue_number) : null,
       queueId: row.queue_id ? String(row.queue_id) : null,
     });
   }
@@ -70,7 +74,9 @@ async function fetchGuestInfoByOrderIds(
 export async function fetchSaleLogsWithProducts(
   dayNumber?: EventDay
 ): Promise<SaleLogWithProduct[]> {
-  // sales_logs → order_id → orders 스냅샷 (queues 조인 없음)
+  // guest_* 스냅샷 우선, 없으면 order_id → orders
+  const selectWithGuest =
+    "id, product_id, day_number, sold_from, quantity, total_price, created_at, payment_group_id, order_id, queue_id, guest_customer_name, guest_queue_number";
   const selectFull =
     "id, product_id, day_number, sold_from, quantity, total_price, created_at, payment_group_id, order_id, queue_id";
   const selectWithOrder =
@@ -80,7 +86,7 @@ export async function fetchSaleLogsWithProducts(
 
   let salesQuery = supabase
     .from("sales_logs")
-    .select(selectFull)
+    .select(selectWithGuest)
     .order("created_at", { ascending: false })
     .limit(1000);
 
@@ -89,6 +95,21 @@ export async function fetchSaleLogsWithProducts(
   }
 
   let salesResult = await salesQuery;
+
+  if (
+    salesResult.error &&
+    /guest_customer_name|guest_queue_number|schema cache|could not find/i.test(
+      salesResult.error.message
+    )
+  ) {
+    let q = supabase
+      .from("sales_logs")
+      .select(selectFull)
+      .order("created_at", { ascending: false })
+      .limit(1000);
+    if (dayNumber != null) q = q.eq("day_number", dayNumber);
+    salesResult = await q;
+  }
 
   if (
     salesResult.error &&
@@ -167,10 +188,22 @@ export async function fetchSaleLogsWithProducts(
       payment_group_id?: string | null;
       order_id?: string | null;
       queue_id?: string | null;
+      guest_customer_name?: string | null;
+      guest_queue_number?: number | null;
     };
 
     const orderId = rowExt.order_id ? String(rowExt.order_id) : null;
-    const guest = orderId ? guestByOrderId.get(orderId) : undefined;
+    const fromOrder = orderId ? guestByOrderId.get(orderId) : undefined;
+
+    // 1) sales_logs 스냅샷 2) orders 스냅샷
+    const customerName =
+      normalizePhoneTail(rowExt.guest_customer_name) ||
+      fromOrder?.customerName ||
+      null;
+    const queueNumber =
+      (Number(rowExt.guest_queue_number) || 0) > 0
+        ? Number(rowExt.guest_queue_number)
+        : (fromOrder?.queueNumber ?? null);
 
     return {
       id: String(row.id),
@@ -188,9 +221,9 @@ export async function fetchSaleLogsWithProducts(
         ? String(rowExt.payment_group_id)
         : null,
       orderId,
-      queueId: guest?.queueId ?? (rowExt.queue_id ? String(rowExt.queue_id) : null),
-      customerName: guest?.customerName ?? null,
-      queueNumber: guest?.queueNumber ?? null,
+      queueId: fromOrder?.queueId ?? (rowExt.queue_id ? String(rowExt.queue_id) : null),
+      customerName,
+      queueNumber,
     };
   });
 }

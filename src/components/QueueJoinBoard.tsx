@@ -2,6 +2,7 @@
 
 import { useState, type FormEvent } from "react";
 import { useRouter } from "next/navigation";
+import { fetchStoreSettings } from "@/lib/storeSettings";
 import { supabase } from "@/lib/supabase";
 
 const PHONE_TAIL_RE = /^\d{4}$/;
@@ -50,7 +51,21 @@ export default function QueueJoinBoard() {
         return;
       }
 
-      // 2) 신규 발급
+      // 2) 자동 입장 모드 확인
+      let initialStatus: "waiting" | "entered" = "waiting";
+      try {
+        const settings = await fetchStoreSettings();
+        if (settings.autoEnter) {
+          initialStatus = "entered";
+        }
+      } catch (settingsErr) {
+        console.warn(
+          "[QueueJoinBoard] store_settings 조회 실패 — waiting 유지",
+          settingsErr
+        );
+      }
+
+      // 3) 신규 발급
       const { data: maxRows, error: maxError } = await supabase
         .from("queues")
         .select("queue_number")
@@ -70,7 +85,7 @@ export default function QueueJoinBoard() {
         .insert({
           queue_number: nextNumber,
           customer_name: digits,
-          status: "waiting",
+          status: initialStatus,
         })
         .select("id")
         .single();
@@ -120,33 +135,27 @@ export default function QueueJoinBoard() {
             <input
               type="tel"
               inputMode="numeric"
-              pattern="[0-9]*"
+              autoComplete="off"
               maxLength={4}
               value={phoneTail}
-              onChange={(event) => handlePhoneChange(event.target.value)}
-              disabled={loading}
+              onChange={(e) => handlePhoneChange(e.target.value)}
               placeholder="예: 1234"
-              autoComplete="tel-national"
-              autoFocus
-              className="w-full rounded-xl border border-gray-200 bg-white px-4 py-3 text-center text-2xl font-bold tracking-[0.35em] text-gray-900 outline-none placeholder:text-base placeholder:font-normal placeholder:tracking-normal placeholder:text-gray-400 focus:border-sky-500 disabled:opacity-60"
+              className="w-full rounded-xl border border-gray-300 px-4 py-3 text-center text-2xl font-bold tracking-[0.35em] text-gray-900 outline-none ring-sky-500 focus:ring-2"
             />
           </label>
 
           {error && (
-            <p
-              role="alert"
-              className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700"
-            >
+            <p className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
               {error}
             </p>
           )}
 
           <button
             type="submit"
-            disabled={loading || !isValid}
-            className="w-full rounded-xl bg-sky-600 px-4 py-3.5 text-base font-bold text-white transition hover:bg-sky-500 disabled:cursor-not-allowed disabled:bg-gray-300"
+            disabled={!isValid || loading}
+            className="w-full rounded-xl bg-sky-600 px-4 py-3.5 text-base font-bold text-white shadow-sm transition hover:bg-sky-700 disabled:cursor-not-allowed disabled:opacity-50"
           >
-            {loading ? "확인 중..." : "입장하기"}
+            {loading ? "처리 중…" : "입장하기"}
           </button>
         </form>
       </div>

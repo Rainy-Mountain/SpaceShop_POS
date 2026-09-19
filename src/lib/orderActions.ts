@@ -972,7 +972,7 @@ export async function completePosPayment(
     throw queueResult.error;
   }
 
-  // ── 4) 매출 기록 — order_id·queue_id 를 최대한 보존 (손님 표기용 조인 키)
+  // ── 4) 매출 기록 — order_id + 손님 스냅샷(guest_*) 을 함께 저장
   const paymentGroupId =
     typeof crypto !== "undefined" && "randomUUID" in crypto
       ? crypto.randomUUID()
@@ -986,27 +986,38 @@ export async function completePosPayment(
     total_price: item.unitPrice * item.quantity,
   }));
 
+  const guestSnapshot = {
+    guest_customer_name: guestLabel,
+    guest_queue_number: queueNumber > 0 ? queueNumber : 0,
+  };
+
   type SaleInsertAttempt = Record<string, unknown>[];
   const insertAttempts: SaleInsertAttempt[] = [
-    // 1) 전체 (payment_group + order + queue)
+    // 1) 전체 + 손님 스냅샷
     coreSaleRows.map((row) => ({
       ...row,
+      ...guestSnapshot,
       payment_group_id: paymentGroupId,
       order_id: orderId,
       queue_id: queueId,
     })),
-    // 2) order_id + queue_id (payment_group 없을 때)
+    // 2) order_id + 손님 스냅샷 (가장 중요한 표기용)
+    coreSaleRows.map((row) => ({
+      ...row,
+      ...guestSnapshot,
+      order_id: orderId,
+    })),
+    // 3) 손님 스냅샷만 (order_id 컬럼 없을 때)
+    coreSaleRows.map((row) => ({
+      ...row,
+      ...guestSnapshot,
+    })),
+    // 4) order_id 만
     coreSaleRows.map((row) => ({
       ...row,
       order_id: orderId,
-      queue_id: queueId,
     })),
-    // 3) order_id 만 — 대기열 손님 연결의 최소 조건
-    coreSaleRows.map((row) => ({
-      ...row,
-      order_id: orderId,
-    })),
-    // 4) 핵심 컬럼만 (최후 — 손님 표기 불가, 재고·매출은 유지)
+    // 5) 핵심 컬럼만
     coreSaleRows,
   ];
 
@@ -1018,9 +1029,8 @@ export async function completePosPayment(
       break;
     }
     salesError = result.error;
-    // 스키마/FK 관련만 다음 시도, 그 외는 즉시 중단
     if (
-      !/payment_group_id|order_id|queue_id|customer_name|schema cache|could not find|foreign key|relationship/i.test(
+      !/payment_group_id|order_id|queue_id|guest_customer_name|guest_queue_number|customer_name|schema cache|could not find|foreign key|relationship/i.test(
         result.error.message
       )
     ) {

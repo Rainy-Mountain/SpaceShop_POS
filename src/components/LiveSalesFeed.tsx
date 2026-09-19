@@ -22,7 +22,7 @@ function formatCurrency(value: number): string {
   return `${Number(value || 0).toLocaleString("ko-KR")}원`;
 }
 
-/** orders 스냅샷 기준: 폰번호 있으면 순번+이름, 없으면 워크인 */
+/** orders/sales 스냅샷 기준: 폰번호 있으면 순번+이름, 없으면 워크인 */
 function formatGuestLabel(group: {
   customerName?: string | null;
   queueNumber?: number | null;
@@ -40,7 +40,7 @@ function formatGuestLabel(group: {
   }
 
   const queueNumber =
-    typeof group.queueNumber === "number" && group.queueNumber > 0
+    typeof group.queueNumber === "number" && Number.isFinite(group.queueNumber)
       ? group.queueNumber
       : 0;
   return `[순번: ${queueNumber}번] ${phone}님`;

@@ -9,6 +9,10 @@ import {
   SMART_ORDER_TRUNCATE_HINT,
   updateQueueNumber,
 } from "@/lib/orderActions";
+import {
+  fetchStoreSettings,
+  setAutoEnterMode,
+} from "@/lib/storeSettings";
 import { getSupabase } from "@/lib/supabase";
 
 type OrderItemPreview = {
@@ -165,6 +169,9 @@ export default function StaffQrBoard() {
   const [admittingId, setAdmittingId] = useState<string | null>(null);
   const [renumberingId, setRenumberingId] = useState<string | null>(null);
   const [clearingAll, setClearingAll] = useState(false);
+  const [autoEnter, setAutoEnter] = useState(false);
+  const [autoEnterReady, setAutoEnterReady] = useState(false);
+  const [autoEnterSaving, setAutoEnterSaving] = useState(false);
 
   useEffect(() => {
     const origin =
@@ -263,6 +270,64 @@ export default function StaffQrBoard() {
     void loadQueues();
     void loadStorageMap();
   }, [loadQueues, loadStorageMap]);
+
+  // 자동 입장 모드 (전역 store_settings)
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    let disposed = false;
+
+    void fetchStoreSettings()
+      .then((settings) => {
+        if (!disposed) {
+          setAutoEnter(settings.autoEnter);
+          setAutoEnterReady(true);
+        }
+      })
+      .catch((err) => {
+        console.error("[StaffQrBoard] store_settings 조회 실패", err);
+        if (!disposed) setAutoEnterReady(true);
+      });
+
+    const supabase = getSupabase();
+    const channel = supabase
+      .channel("staff-store-settings")
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "store_settings" },
+        (payload) => {
+          const next = (payload.new ?? {}) as { auto_enter?: boolean };
+          if (typeof next.auto_enter === "boolean") {
+            setAutoEnter(next.auto_enter);
+          } else {
+            void fetchStoreSettings().then((s) => setAutoEnter(s.autoEnter));
+          }
+        }
+      )
+      .subscribe();
+
+    return () => {
+      disposed = true;
+      void supabase.removeChannel(channel);
+    };
+  }, []);
+
+  async function handleToggleAutoEnter() {
+    if (autoEnterSaving || !autoEnterReady) return;
+    const next = !autoEnter;
+    setAutoEnterSaving(true);
+    setAutoEnter(next); // 낙관적
+    try {
+      const saved = await setAutoEnterMode(next);
+      setAutoEnter(saved.autoEnter);
+    } catch (err) {
+      setAutoEnter(!next);
+      const message =
+        err instanceof Error ? err.message : "설정 저장에 실패했습니다.";
+      window.alert(message);
+    } finally {
+      setAutoEnterSaving(false);
+    }
+  }
 
   // queues / orders / order_items / inventory 통합 Realtime
   useEffect(() => {
@@ -553,19 +618,65 @@ export default function StaffQrBoard() {
 
         {/* 우측: 대기자 리스트 (넓은 영역 + 독립 스크롤) */}
         <section className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-2xl border border-gray-200 bg-white shadow-sm lg:min-h-[calc(100vh-12rem)]">
-          <div className="flex shrink-0 items-center justify-between border-b border-gray-100 px-5 py-3.5">
-            <div>
-              <h2 className="text-base font-bold text-gray-900">
-                대기자 리스트
-              </h2>
-              <p className="mt-0.5 text-xs text-gray-400">
-                입장 승인 · 담기/빼기 즉시 반영 · 포스기 전송
-              </p>
+          <div className="flex shrink-0 flex-col gap-3 border-b border-gray-100 px-5 py-3.5">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <h2 className="text-base font-bold text-gray-900">
+                  대기자 리스트
+                </h2>
+                <p className="mt-0.5 text-xs text-gray-400">
+                  입장 승인 · 담기/빼기 즉시 반영 · 포스기 전송
+                </p>
+              </div>
+              <span className="inline-flex items-center gap-1.5 rounded-full bg-emerald-50 px-2.5 py-1 text-[11px] font-semibold text-emerald-700">
+                <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-emerald-500" />
+                LIVE
+              </span>
             </div>
-            <span className="inline-flex items-center gap-1.5 rounded-full bg-emerald-50 px-2.5 py-1 text-[11px] font-semibold text-emerald-700">
-              <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-emerald-500" />
-              LIVE
-            </span>
+
+            {/* 자동 입장 모드 토글 */}
+            <button
+              type="button"
+              role="switch"
+              aria-checked={autoEnter}
+              disabled={!autoEnterReady || autoEnterSaving}
+              onClick={() => void handleToggleAutoEnter()}
+              className={`flex w-full items-center justify-between gap-3 rounded-xl border px-3.5 py-3 text-left transition-colors disabled:opacity-60 ${
+                autoEnter
+                  ? "border-emerald-300 bg-emerald-50"
+                  : "border-gray-200 bg-gray-50"
+              }`}
+            >
+              <div className="min-w-0">
+                <p
+                  className={`text-sm font-semibold ${
+                    autoEnter ? "text-emerald-900" : "text-gray-800"
+                  }`}
+                >
+                  자동 입장 모드 (웨이팅 끄기)
+                </p>
+                <p
+                  className={`mt-0.5 text-xs ${
+                    autoEnter ? "text-emerald-700" : "text-gray-500"
+                  }`}
+                >
+                  {autoEnter
+                    ? "ON · QR 등록 시 바로 입장 (대기 없음)"
+                    : "OFF · QR 등록 시 입장 대기열에 추가"}
+                </p>
+              </div>
+              <span
+                className={`relative inline-flex h-7 w-12 shrink-0 items-center rounded-full transition-colors ${
+                  autoEnter ? "bg-emerald-500" : "bg-gray-300"
+                }`}
+              >
+                <span
+                  className={`inline-block h-5 w-5 rounded-full bg-white shadow transition-transform ${
+                    autoEnter ? "translate-x-6" : "translate-x-1"
+                  }`}
+                />
+              </span>
+            </button>
           </div>
 
           <div className="min-h-0 flex-1 overflow-y-auto px-3 py-3 sm:px-4">
