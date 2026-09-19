@@ -680,36 +680,43 @@ export async function completePosPayment(
     throw new Error("이미 처리된 주문입니다.");
   }
 
-  // 손님 4자리·순번 — orders ↔ queues 연결 보존
+  // 손님 스냅샷 — 결제 직전 queues에서 읽어 orders에 영구 저장
+  // (이후 queues 삭제/변경되어도 영수증 표기 유지)
   const queueRel = normalizeQueueRelation(
     (order as { queues?: unknown }).queues
   );
   let guestLabel =
-    String(order.customer_name ?? "").trim() ||
     String(queueRel?.customer_name ?? "").trim() ||
+    String(order.customer_name ?? "").trim() ||
     "";
   let queueNumber =
-    Number((order as { queue_number?: number }).queue_number) ||
     Number(queueRel?.queue_number) ||
+    Number((order as { queue_number?: number }).queue_number) ||
     0;
   const queueId = String(order.queue_id ?? "").trim();
   if (!queueId) {
     throw new Error("주문에 연결된 대기열(queue_id)이 없습니다.");
   }
 
-  // 조인 실패·빈 값일 때 queues 직접 조회
-  if (!guestLabel || !queueNumber) {
+  // 조인 실패 시 queues 직접 조회 (스냅샷 소스)
+  {
     const { data: queueRow } = await supabase
       .from("queues")
       .select("customer_name, queue_number")
       .eq("id", queueId)
       .maybeSingle();
-    if (!guestLabel) {
-      guestLabel = String(queueRow?.customer_name ?? "").trim();
+    if (queueRow) {
+      const fromQueueName = String(queueRow.customer_name ?? "").trim();
+      const fromQueueNum = Number(queueRow.queue_number) || 0;
+      if (fromQueueName) guestLabel = fromQueueName;
+      if (fromQueueNum > 0) queueNumber = fromQueueNum;
     }
-    if (!queueNumber) {
-      queueNumber = Number(queueRow?.queue_number) || 0;
-    }
+  }
+
+  if (!guestLabel) {
+    throw new Error(
+      "대기열 손님 번호(customer_name)를 확인할 수 없습니다. 다시 불러와 주세요."
+    );
   }
 
   // 최종 장바구니(수동 추가 포함) 우선 — 없으면 DB order_items
@@ -918,14 +925,15 @@ export async function completePosPayment(
     }
   }
 
-  // ── 3) queue_id·손님정보 보존 후 status=paid ──
+  // ── 3) 손님 스냅샷(denormalize) + status=paid ──
+  // queues가 나중에 삭제되어도 orders.customer_name / queue_number 로 영수증 표기
   const paidPayload: Record<string, unknown> = {
     status: "paid",
     total_price: orderTotal,
     queue_id: queueId,
+    customer_name: guestLabel,
+    queue_number: queueNumber > 0 ? queueNumber : 0,
   };
-  if (guestLabel) paidPayload.customer_name = guestLabel;
-  if (queueNumber > 0) paidPayload.queue_number = queueNumber;
 
   let orderResult = await supabase
     .from("orders")
@@ -938,15 +946,14 @@ export async function completePosPayment(
     orderResult.error &&
     /total_price/i.test(orderResult.error.message ?? "")
   ) {
-    const fallbackPayload: Record<string, unknown> = {
-      status: "paid",
-      queue_id: queueId,
-    };
-    if (guestLabel) fallbackPayload.customer_name = guestLabel;
-    if (queueNumber > 0) fallbackPayload.queue_number = queueNumber;
     orderResult = await supabase
       .from("orders")
-      .update(fallbackPayload)
+      .update({
+        status: "paid",
+        queue_id: queueId,
+        customer_name: guestLabel,
+        queue_number: queueNumber > 0 ? queueNumber : 0,
+      })
       .eq("id", orderId)
       .eq("status", "pending");
   }

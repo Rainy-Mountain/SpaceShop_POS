@@ -17,12 +17,6 @@ function toNumber(value: unknown): number {
   return 0;
 }
 
-function normalizeJoinedRelation<T extends object>(value: unknown): T | null {
-  if (!value) return null;
-  if (Array.isArray(value)) return (value[0] as T) ?? null;
-  return value as T;
-}
-
 function isPlaceholderGuest(value: string): boolean {
   return (
     !value ||
@@ -39,35 +33,10 @@ type GuestInfo = {
   queueId: string | null;
 };
 
-/** orders / queues 에서 폰 뒷자리·순번 추출 */
-function resolveGuestInfo(options: {
-  orderCustomerName?: string | null;
-  orderQueueNumber?: number | null;
-  orderQueueId?: string | null;
-  queueCustomerName?: string | null;
-  queueNumber?: number | null;
-  queueId?: string | null;
-}): GuestInfo {
-  const phoneRaw =
-    String(options.orderCustomerName ?? "").trim() ||
-    String(options.queueCustomerName ?? "").trim();
-  const customerName = isPlaceholderGuest(phoneRaw) ? null : phoneRaw;
-
-  const queueNumber =
-    (Number(options.orderQueueNumber) || 0) > 0
-      ? Number(options.orderQueueNumber)
-      : (Number(options.queueNumber) || 0) > 0
-        ? Number(options.queueNumber)
-        : null;
-
-  const queueId =
-    String(options.orderQueueId ?? "").trim() ||
-    String(options.queueId ?? "").trim() ||
-    null;
-
-  return { customerName, queueNumber, queueId };
-}
-
+/**
+ * 결제 시점 스냅샷 — orders.customer_name / queue_number 만 사용
+ * (queues 조인 없음: 대기열 삭제 후에도 영수증 유지)
+ */
 async function fetchGuestInfoByOrderIds(
   orderIds: string[]
 ): Promise<Map<string, GuestInfo>> {
@@ -76,103 +45,24 @@ async function fetchGuestInfoByOrderIds(
 
   const { data, error } = await supabase
     .from("orders")
-    .select(
-      "id, customer_name, queue_number, queue_id, queues ( customer_name, queue_number )"
-    )
+    .select("id, customer_name, queue_number, queue_id")
     .in("id", orderIds);
 
   if (error) {
-    const plain = await supabase
-      .from("orders")
-      .select("id, customer_name, queue_number, queue_id")
-      .in("id", orderIds);
-
-    for (const row of plain.data ?? []) {
-      map.set(
-        String(row.id),
-        resolveGuestInfo({
-          orderCustomerName: row.customer_name as string | null,
-          orderQueueNumber: row.queue_number as number | null,
-          orderQueueId: row.queue_id as string | null,
-        })
-      );
-    }
-
-    const linkedQueueIds = [
-      ...new Set(
-        [...map.values()]
-          .map((g) => g.queueId)
-          .filter((id): id is string => Boolean(id))
-      ),
-    ];
-    if (linkedQueueIds.length > 0) {
-      const { data: queues } = await supabase
-        .from("queues")
-        .select("id, customer_name, queue_number")
-        .in("id", linkedQueueIds);
-      const queueById = new Map(
-        (queues ?? []).map((q) => [String(q.id), q])
-      );
-      for (const [orderId, guest] of map) {
-        if (!guest.queueId) continue;
-        const q = queueById.get(guest.queueId);
-        if (!q) continue;
-        map.set(
-          orderId,
-          resolveGuestInfo({
-            orderCustomerName: guest.customerName,
-            orderQueueNumber: guest.queueNumber,
-            orderQueueId: guest.queueId,
-            queueCustomerName: q.customer_name as string | null,
-            queueNumber: q.queue_number as number | null,
-            queueId: guest.queueId,
-          })
-        );
-      }
-    }
+    console.error("[fetchGuestInfoByOrderIds]", error.message);
     return map;
   }
 
   for (const row of data ?? []) {
-    const queue = normalizeJoinedRelation<{
-      customer_name?: string | null;
-      queue_number?: number | null;
-    }>(row.queues);
-    map.set(
-      String(row.id),
-      resolveGuestInfo({
-        orderCustomerName: row.customer_name as string | null,
-        orderQueueNumber: row.queue_number as number | null,
-        orderQueueId: row.queue_id as string | null,
-        queueCustomerName: queue?.customer_name,
-        queueNumber: queue?.queue_number,
-        queueId: row.queue_id as string | null,
-      })
-    );
-  }
-  return map;
-}
-
-async function fetchGuestInfoByQueueIds(
-  queueIds: string[]
-): Promise<Map<string, GuestInfo>> {
-  const map = new Map<string, GuestInfo>();
-  if (queueIds.length === 0) return map;
-
-  const { data } = await supabase
-    .from("queues")
-    .select("id, customer_name, queue_number")
-    .in("id", queueIds);
-
-  for (const row of data ?? []) {
-    map.set(
-      String(row.id),
-      resolveGuestInfo({
-        queueCustomerName: row.customer_name as string | null,
-        queueNumber: row.queue_number as number | null,
-        queueId: String(row.id),
-      })
-    );
+    const phone = String(row.customer_name ?? "").trim();
+    const customerName = isPlaceholderGuest(phone) ? null : phone;
+    const queueNumber =
+      (Number(row.queue_number) || 0) > 0 ? Number(row.queue_number) : null;
+    map.set(String(row.id), {
+      customerName,
+      queueNumber,
+      queueId: row.queue_id ? String(row.queue_id) : null,
+    });
   }
   return map;
 }
@@ -180,7 +70,7 @@ async function fetchGuestInfoByQueueIds(
 export async function fetchSaleLogsWithProducts(
   dayNumber?: EventDay
 ): Promise<SaleLogWithProduct[]> {
-  // sales_logs.customer_name 직접 참조 금지 — order_id / queue_id 로 손님 정보 조회
+  // sales_logs → order_id → orders 스냅샷 (queues 조인 없음)
   const selectFull =
     "id, product_id, day_number, sold_from, quantity, total_price, created_at, payment_group_id, order_id, queue_id";
   const selectWithOrder =
@@ -256,22 +146,8 @@ export async function fetchSaleLogsWithProducts(
         .filter(Boolean)
     ),
   ];
-  const queueIds = [
-    ...new Set(
-      rows
-        .map((row) => {
-          const ext = row as { queue_id?: string | null };
-          return ext.queue_id ? String(ext.queue_id) : "";
-        })
-        .filter(Boolean)
-    ),
-  ];
 
-  // 항상 별도 조회로 보강 (임베드 FK 의존 X)
-  const [guestByOrderId, guestByQueueId] = await Promise.all([
-    fetchGuestInfoByOrderIds(orderIds),
-    fetchGuestInfoByQueueIds(queueIds),
-  ]);
+  const guestByOrderId = await fetchGuestInfoByOrderIds(orderIds);
 
   const productMap = new Map(
     (productsResult.data ?? []).map((product) => [
@@ -294,21 +170,7 @@ export async function fetchSaleLogsWithProducts(
     };
 
     const orderId = rowExt.order_id ? String(rowExt.order_id) : null;
-    const rawQueueId = rowExt.queue_id ? String(rowExt.queue_id) : null;
-
-    const fromOrder = orderId ? guestByOrderId.get(orderId) : undefined;
-    const fromQueue = rawQueueId
-      ? guestByQueueId.get(rawQueueId)
-      : undefined;
-
-    const guest = resolveGuestInfo({
-      orderCustomerName: fromOrder?.customerName,
-      orderQueueNumber: fromOrder?.queueNumber,
-      orderQueueId: fromOrder?.queueId ?? rawQueueId,
-      queueCustomerName: fromQueue?.customerName,
-      queueNumber: fromQueue?.queueNumber,
-      queueId: fromQueue?.queueId ?? fromOrder?.queueId ?? rawQueueId,
-    });
+    const guest = orderId ? guestByOrderId.get(orderId) : undefined;
 
     return {
       id: String(row.id),
@@ -326,9 +188,9 @@ export async function fetchSaleLogsWithProducts(
         ? String(rowExt.payment_group_id)
         : null,
       orderId,
-      queueId: guest.queueId,
-      customerName: guest.customerName,
-      queueNumber: guest.queueNumber,
+      queueId: guest?.queueId ?? (rowExt.queue_id ? String(rowExt.queue_id) : null),
+      customerName: guest?.customerName ?? null,
+      queueNumber: guest?.queueNumber ?? null,
     };
   });
 }

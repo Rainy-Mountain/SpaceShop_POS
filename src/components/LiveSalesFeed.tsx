@@ -22,16 +22,12 @@ function formatCurrency(value: number): string {
   return `${Number(value || 0).toLocaleString("ko-KR")}원`;
 }
 
-/** 순번+폰뒷자리 또는 워크인 */
+/** orders 스냅샷 기준: 폰번호 있으면 순번+이름, 없으면 워크인 */
 function formatGuestLabel(group: {
   customerName?: string | null;
   queueNumber?: number | null;
 }): string {
   const phone = String(group.customerName ?? "").trim();
-  const queueNumber =
-    typeof group.queueNumber === "number" && group.queueNumber > 0
-      ? group.queueNumber
-      : null;
   const hasPhone =
     Boolean(phone) &&
     phone !== "현장" &&
@@ -39,16 +35,15 @@ function formatGuestLabel(group: {
     phone !== "현장 손님" &&
     phone !== "워크인";
 
-  if (!hasPhone && queueNumber == null) {
+  if (!hasPhone) {
     return "워크인";
   }
 
-  const seq =
-    queueNumber != null
-      ? String(queueNumber).padStart(2, "0")
-      : "--";
-  const phoneLabel = hasPhone ? phone : "----";
-  return `[순번: ${seq}번] ${phoneLabel}님`;
+  const queueNumber =
+    typeof group.queueNumber === "number" && group.queueNumber > 0
+      ? group.queueNumber
+      : 0;
+  return `[순번: ${queueNumber}번] ${phone}님`;
 }
 
 function isWalkInGuest(group: {

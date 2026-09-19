@@ -35,7 +35,7 @@ create table if not exists sales_logs (
 );
 
 -- 결제 건 그룹화 컬럼 (기존 DB: add_sales_payment_group.sql 실행)
--- 손님 번호·순번은 orders / queues 조인으로 표시 (sales_logs에 customer_name 없음)
+-- 손님 번호·순번은 결제 시 orders에 스냅샷 저장 (queues 조인 불필요)
 -- alter table sales_logs add column if not exists payment_group_id uuid;
 -- alter table sales_logs add column if not exists order_id uuid;
 -- alter table sales_logs add column if not exists queue_id uuid;
@@ -90,6 +90,7 @@ create table if not exists orders (
 -- 기존 orders에 컬럼이 없다면 실행
 -- alter table orders add column if not exists customer_name text;
 -- alter table orders add column if not exists queue_number integer;
+-- 결제 완료 시 queues 스냅샷을 orders에 저장 (조인 없이 영수증 표기)
 
 create index if not exists orders_status_idx on orders (status);
 create index if not exists orders_queue_id_idx on orders (queue_id);
