@@ -470,6 +470,9 @@ export function buildSalesReport(
       companyType: string;
       quantity: number;
       revenue: number;
+      day1Sales: number;
+      day2Sales: number;
+      day3Sales: number;
     }
   >();
 
@@ -490,6 +493,9 @@ export function buildSalesReport(
     if (existing) {
       existing.quantity += log.quantity;
       existing.revenue += log.totalPrice;
+      if (log.dayNumber === 1) existing.day1Sales += log.quantity;
+      else if (log.dayNumber === 2) existing.day2Sales += log.quantity;
+      else if (log.dayNumber === 3) existing.day3Sales += log.quantity;
     } else {
       productMap.set(log.productId, {
         productName: log.productName,
@@ -497,6 +503,9 @@ export function buildSalesReport(
         companyType: log.companyType,
         quantity: log.quantity,
         revenue: log.totalPrice,
+        day1Sales: log.dayNumber === 1 ? log.quantity : 0,
+        day2Sales: log.dayNumber === 2 ? log.quantity : 0,
+        day3Sales: log.dayNumber === 3 ? log.quantity : 0,
       });
     }
   }
@@ -518,11 +527,15 @@ export function buildSalesReport(
       companyType: value.companyType,
       quantity: value.quantity,
       revenue: value.revenue,
+      day1Sales: value.day1Sales,
+      day2Sales: value.day2Sales,
+      day3Sales: value.day3Sales,
     }))
     .sort((a, b) => {
       if (b.quantity !== a.quantity) return b.quantity - a.quantity;
       return b.revenue - a.revenue;
-    });
+    })
+    .slice(0, 10);
 
   return {
     totalRevenue,

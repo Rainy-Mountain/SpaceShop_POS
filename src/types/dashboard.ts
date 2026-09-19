@@ -39,7 +39,13 @@ export interface DashboardRow {
   storageQty: number;
   backupQty: number;
   totalQty: number;
+  /** 총 판매량 (1~3일차 합) — 하위 호환 */
   soldQty: number;
+  soldDay1: number;
+  soldDay2: number;
+  soldDay3: number;
+  /** 기초 입고 ≈ 잔여 + 총판매 */
+  initialQty: number;
 }
 
 export interface SaleLogItem {

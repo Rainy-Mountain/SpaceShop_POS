@@ -60,6 +60,9 @@ export interface ProductSalesRank {
   companyType: string;
   quantity: number;
   revenue: number;
+  day1Sales: number;
+  day2Sales: number;
+  day3Sales: number;
 }
 
 export interface SalesReportSummary {

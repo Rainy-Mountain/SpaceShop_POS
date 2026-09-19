@@ -313,7 +313,7 @@ export default function SalesReportDashboard() {
                 개별 제품 판매 랭킹
               </h2>
               <p className="mt-1 text-sm text-slate-500">
-                판매 수량 기준 내림차순
+                기존 랭킹 · 1~3일차 판매량 추가
               </p>
             </div>
 
@@ -321,22 +321,31 @@ export default function SalesReportDashboard() {
               <table className="min-w-full border-collapse text-left text-sm">
                 <thead className="bg-slate-50 text-xs uppercase tracking-wide text-slate-500">
                   <tr>
-                    <th className="whitespace-nowrap px-4 py-3.5 font-semibold">
+                    <th className="whitespace-nowrap px-3 py-3 font-semibold">
                       랭킹
                     </th>
-                    <th className="whitespace-nowrap px-4 py-3.5 font-semibold">
+                    <th className="whitespace-nowrap px-3 py-3 font-semibold">
                       제품명
                     </th>
-                    <th className="whitespace-nowrap px-4 py-3.5 font-semibold">
+                    <th className="whitespace-nowrap px-3 py-3 font-semibold">
                       브랜드
                     </th>
-                    <th className="whitespace-nowrap px-4 py-3.5 font-semibold">
+                    <th className="whitespace-nowrap px-3 py-3 font-semibold">
                       구분
                     </th>
-                    <th className="whitespace-nowrap px-4 py-3.5 text-right font-semibold">
-                      총 판매 수량
+                    <th className="whitespace-nowrap px-2 py-3 text-center font-semibold">
+                      1일차
                     </th>
-                    <th className="whitespace-nowrap px-4 py-3.5 text-right font-semibold">
+                    <th className="whitespace-nowrap px-2 py-3 text-center font-semibold">
+                      2일차
+                    </th>
+                    <th className="whitespace-nowrap px-2 py-3 text-center font-semibold">
+                      3일차
+                    </th>
+                    <th className="whitespace-nowrap px-3 py-3 text-right font-semibold">
+                      총 판매량
+                    </th>
+                    <th className="whitespace-nowrap px-3 py-3 text-right font-semibold">
                       총 발생 매출
                     </th>
                   </tr>
@@ -345,19 +354,19 @@ export default function SalesReportDashboard() {
                   {report.ranking.length === 0 ? (
                     <tr>
                       <td
-                        colSpan={6}
+                        colSpan={9}
                         className="px-4 py-16 text-center text-slate-500"
                       >
                         아직 판매 기록이 없습니다.
                       </td>
                     </tr>
                   ) : (
-                    report.ranking.map((item, index) => (
+                    report.ranking.slice(0, 10).map((item, index) => (
                       <tr
                         key={item.productId}
                         className="border-t border-slate-100 transition hover:bg-slate-50/80"
                       >
-                        <td className="whitespace-nowrap px-4 py-3.5">
+                        <td className="whitespace-nowrap px-3 py-3">
                           <span
                             className={[
                               "inline-flex h-7 w-7 items-center justify-center rounded-full text-xs font-bold",
@@ -373,13 +382,13 @@ export default function SalesReportDashboard() {
                             {index + 1}
                           </span>
                         </td>
-                        <td className="min-w-[12rem] px-4 py-3.5 font-semibold text-slate-900">
+                        <td className="min-w-[10rem] px-3 py-3 font-semibold text-slate-900">
                           {item.productName}
                         </td>
-                        <td className="whitespace-nowrap px-4 py-3.5 text-slate-700">
+                        <td className="whitespace-nowrap px-3 py-3 text-slate-700">
                           {item.brand}
                         </td>
-                        <td className="whitespace-nowrap px-4 py-3.5">
+                        <td className="whitespace-nowrap px-3 py-3">
                           <span
                             className={[
                               "inline-flex rounded-full px-2.5 py-1 text-xs font-semibold",
@@ -391,10 +400,19 @@ export default function SalesReportDashboard() {
                             {item.companyType}
                           </span>
                         </td>
-                        <td className="whitespace-nowrap px-4 py-3.5 text-right tabular-nums font-semibold text-slate-900">
+                        <td className="whitespace-nowrap px-2 py-3 text-center tabular-nums text-slate-700">
+                          {item.day1Sales || "—"}
+                        </td>
+                        <td className="whitespace-nowrap px-2 py-3 text-center tabular-nums text-slate-700">
+                          {item.day2Sales || "—"}
+                        </td>
+                        <td className="whitespace-nowrap px-2 py-3 text-center tabular-nums text-slate-700">
+                          {item.day3Sales || "—"}
+                        </td>
+                        <td className="whitespace-nowrap px-3 py-3 text-right tabular-nums font-semibold text-slate-900">
                           {formatNumber(item.quantity)}
                         </td>
-                        <td className="whitespace-nowrap px-4 py-3.5 text-right tabular-nums font-semibold text-emerald-700">
+                        <td className="whitespace-nowrap px-3 py-3 text-right tabular-nums font-semibold text-emerald-700">
                           {formatCurrency(item.revenue)}
                         </td>
                       </tr>
@@ -403,6 +421,11 @@ export default function SalesReportDashboard() {
                 </tbody>
               </table>
             </div>
+            {report.ranking.length > 0 ? (
+              <p className="border-t border-slate-100 px-5 py-3 text-xs text-gray-400">
+                ※ 상위 10개 품목만 표시됩니다.
+              </p>
+            ) : null}
           </section>
         </div>
       )}

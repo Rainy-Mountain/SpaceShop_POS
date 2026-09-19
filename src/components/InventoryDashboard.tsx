@@ -21,6 +21,7 @@ import ToastStack, {
 import {
   fetchDashboardSalesStats,
   fetchInventoryDashboardData,
+  type ProductDaySales,
   type SalesTotals,
 } from "@/lib/fetchInventory";
 import { deleteProduct, updateInventoryField, updateProductPrice } from "@/lib/inventoryActions";
@@ -35,7 +36,6 @@ import {
 import { supabase } from "@/lib/supabase";
 import { useEventDay } from "@/hooks/useEventDay";
 import {
-  getRecommendedSales,
   type CompanyFilter,
   type DashboardRow,
   type EventDay,
@@ -52,13 +52,25 @@ function toRealtimeNumber(value: unknown): number {
 
 function applySoldQtyMap(
   setRows: Dispatch<SetStateAction<DashboardRow[]>>,
-  byProduct: Map<string, number>
+  byProduct: Map<string, ProductDaySales>
 ) {
   setRows((prev) =>
-    (prev ?? []).map((row) => ({
-      ...row,
-      soldQty: byProduct.get(row.id) ?? 0,
-    }))
+    (prev ?? []).map((row) => {
+      const sales = byProduct.get(row.id) ?? {
+        day1: 0,
+        day2: 0,
+        day3: 0,
+        total: 0,
+      };
+      return {
+        ...row,
+        soldQty: sales.total,
+        soldDay1: sales.day1,
+        soldDay2: sales.day2,
+        soldDay3: sales.day3,
+        initialQty: row.totalQty + sales.total,
+      };
+    })
   );
 }
 
@@ -131,6 +143,7 @@ function InventoryRealtimeSync({
                     storageQty,
                     backupQty,
                     totalQty: storageQty + backupQty,
+                    initialQty: storageQty + backupQty + row.soldQty,
                   }
                 : row
             )
@@ -239,10 +252,12 @@ function EditablePriceCell({
   productId,
   price,
   onUpdated,
+  cellClassName = "",
 }: {
   productId: string;
   price: number;
   onUpdated: (productId: string, nextPrice: number) => void;
+  cellClassName?: string;
 }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(String(price));
@@ -295,7 +310,12 @@ function EditablePriceCell({
 
   if (editing) {
     return (
-      <td className="px-1.5 py-1 text-right">
+      <td
+        className={[
+          "w-20 whitespace-nowrap px-1 py-1 text-center",
+          cellClassName,
+        ].join(" ")}
+      >
         <input
           autoFocus
           type="number"
@@ -306,18 +326,23 @@ function EditablePriceCell({
           onChange={(event) => setDraft(event.target.value)}
           onBlur={() => void save()}
           onKeyDown={onKeyDown}
-          className="w-20 rounded border border-sky-300 px-1 py-0.5 text-right text-xs outline-none focus:ring-2 focus:ring-sky-200"
+          className="w-16 rounded border border-sky-300 px-1 py-0.5 text-center text-xs outline-none focus:ring-2 focus:ring-sky-200"
         />
       </td>
     );
   }
 
   return (
-    <td className="px-1.5 py-1 text-right">
+    <td
+      className={[
+        "w-20 whitespace-nowrap px-1 py-1 text-center",
+        cellClassName,
+      ].join(" ")}
+    >
       <button
         type="button"
         onClick={() => setEditing(true)}
-        className="inline-flex min-h-8 min-w-[2.5rem] items-center justify-end rounded px-2 py-1.5 tabular-nums text-xs text-slate-700 transition cursor-pointer hover:bg-sky-50 hover:text-sky-700 hover:underline"
+        className="inline-flex min-h-8 min-w-[2.5rem] items-center justify-center rounded px-1.5 py-1.5 tabular-nums text-xs text-slate-700 transition cursor-pointer hover:bg-sky-50 hover:text-sky-700 hover:underline"
         title="가격 수정"
       >
         {formatPrice(price)}
@@ -332,6 +357,7 @@ function EditableQtyCell({
   value,
   label,
   onUpdated,
+  cellClassName = "",
 }: {
   productId: string;
   field: "storage_qty" | "backup_qty";
@@ -342,6 +368,7 @@ function EditableQtyCell({
     field: "storage_qty" | "backup_qty",
     nextQty: number
   ) => void;
+  cellClassName?: string;
 }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(String(value));
@@ -395,7 +422,12 @@ function EditableQtyCell({
 
   if (editing) {
     return (
-      <td className="px-1.5 py-1 text-right">
+      <td
+        className={[
+          "w-16 whitespace-nowrap px-0.5 py-1 text-center",
+          cellClassName,
+        ].join(" ")}
+      >
         <input
           autoFocus
           type="number"
@@ -406,18 +438,23 @@ function EditableQtyCell({
           onChange={(event) => setDraft(event.target.value)}
           onBlur={() => void save()}
           onKeyDown={onKeyDown}
-          className="w-14 rounded border border-sky-300 px-1 py-0.5 text-right text-xs outline-none focus:ring-2 focus:ring-sky-200"
+          className="w-12 rounded border border-sky-300 px-0.5 py-0.5 text-center text-xs outline-none focus:ring-2 focus:ring-sky-200"
         />
       </td>
     );
   }
 
   return (
-    <td className="px-1.5 py-1 text-right">
+    <td
+      className={[
+        "w-16 whitespace-nowrap px-0.5 py-1 text-center",
+        cellClassName,
+      ].join(" ")}
+    >
       <button
         type="button"
         onClick={() => setEditing(true)}
-        className="inline-flex min-h-8 min-w-[2.25rem] items-center justify-end rounded px-2 py-1.5 tabular-nums text-xs font-medium text-slate-800 transition cursor-pointer hover:bg-sky-50 hover:text-sky-700 hover:underline"
+        className="inline-flex min-h-8 min-w-[2rem] items-center justify-center rounded px-1 py-1.5 tabular-nums text-xs font-medium text-slate-800 transition cursor-pointer hover:bg-sky-50 hover:text-sky-700 hover:underline"
         title={`${label} 수정`}
       >
         {value}
@@ -429,15 +466,19 @@ function EditableQtyCell({
 function SummaryCards({
   shopStock,
   backupStock,
-  soldQty,
+  day1Qty,
+  day2Qty,
+  day3Qty,
+  totalSoldQty,
   revenue,
-  eventDay,
 }: {
   shopStock: number;
   backupStock: number;
-  soldQty: number;
+  day1Qty: number;
+  day2Qty: number;
+  day3Qty: number;
+  totalSoldQty: number;
   revenue: number;
-  eventDay: EventDay;
 }) {
   const cards = [
     {
@@ -457,15 +498,15 @@ function SummaryCards({
       valueClass: "text-slate-900",
     },
     {
-      label: `${eventDay}일차 판매 수량`,
-      value: formatNumber(soldQty),
+      label: "1~3일차 총 판매",
+      value: formatNumber(totalSoldQty),
       unit: "개",
       className: "border-emerald-200 bg-emerald-50",
       labelClass: "text-emerald-700",
       valueClass: "text-emerald-950",
     },
     {
-      label: `${eventDay}일차 매출`,
+      label: "누적 매출",
       value: formatCurrency(revenue),
       unit: "",
       className: "border-amber-200 bg-amber-50",
@@ -475,27 +516,33 @@ function SummaryCards({
   ];
 
   return (
-    <section className="mb-4 grid grid-cols-2 gap-2 lg:grid-cols-4">
-      {cards.map((card) => (
-        <article
-          key={card.label}
-          className={`rounded-xl border px-3 py-2.5 shadow-sm ${card.className}`}
-        >
-          <p className={`text-xs font-medium ${card.labelClass}`}>
-            {card.label}
-          </p>
-          <p
-            className={`mt-1 text-lg font-bold tabular-nums tracking-tight sm:text-xl ${card.valueClass}`}
+    <section className="mb-4 space-y-2">
+      <div className="grid grid-cols-2 gap-2 lg:grid-cols-4">
+        {cards.map((card) => (
+          <article
+            key={card.label}
+            className={`rounded-xl border px-3 py-2.5 shadow-sm ${card.className}`}
           >
-            {card.value}
-            {card.unit ? (
-              <span className="ml-0.5 text-sm font-semibold opacity-70">
-                {card.unit}
-              </span>
-            ) : null}
-          </p>
-        </article>
-      ))}
+            <p className={`text-xs font-medium ${card.labelClass}`}>
+              {card.label}
+            </p>
+            <p
+              className={`mt-1 text-lg font-bold tabular-nums tracking-tight sm:text-xl ${card.valueClass}`}
+            >
+              {card.value}
+              {card.unit ? (
+                <span className="ml-0.5 text-sm font-semibold opacity-70">
+                  {card.unit}
+                </span>
+              ) : null}
+            </p>
+          </article>
+        ))}
+      </div>
+      <p className="text-xs text-slate-500">
+        일차별 판매 · 1일차 {formatNumber(day1Qty)} · 2일차{" "}
+        {formatNumber(day2Qty)} · 3일차 {formatNumber(day3Qty)}
+      </p>
     </section>
   );
 }
@@ -517,6 +564,9 @@ export default function InventoryDashboard() {
   const [salesTotals, setSalesTotals] = useState<SalesTotals>({
     quantity: 0,
     revenue: 0,
+    day1Quantity: 0,
+    day2Quantity: 0,
+    day3Quantity: 0,
   });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -723,6 +773,7 @@ export default function InventoryDashboard() {
           storageQty,
           backupQty,
           totalQty: storageQty + backupQty,
+          initialQty: storageQty + backupQty + row.soldQty,
         };
       })
     );
@@ -763,16 +814,18 @@ export default function InventoryDashboard() {
           재고 현황판
         </h1>
         <p className="mt-1 text-xs text-slate-500">
-          판매 수량·매출은 상단에서 선택한 일차 기준으로 집계됩니다
+          가격·샵·백업 재고 수정 유지 · 우측 1~3일차 판매량 집계
         </p>
       </div>
 
       <SummaryCards
         shopStock={summary.shopStock}
         backupStock={summary.backupStock}
-        soldQty={summary.soldQty}
+        day1Qty={salesTotals.day1Quantity}
+        day2Qty={salesTotals.day2Quantity}
+        day3Qty={salesTotals.day3Quantity}
+        totalSoldQty={summary.soldQty}
         revenue={summary.revenue}
-        eventDay={eventDay}
       />
 
       <section className="mb-3 rounded-xl border border-slate-200 bg-white p-3 shadow-sm">
@@ -975,43 +1028,92 @@ export default function InventoryDashboard() {
       {loading ? (
         <TableSkeleton />
       ) : (
-        <div className="rounded-xl border border-slate-200 bg-white shadow-sm">
-          <table className="w-full table-fixed border-collapse text-left text-xs">
+        <div className="overflow-x-auto rounded-xl border border-slate-200 bg-white shadow-sm">
+          <table className="w-full min-w-[1080px] table-fixed border-collapse text-left text-xs">
             <colgroup>
-              <col className="w-[10%]" />
-              <col className="w-[20%]" />
+              <col className="w-[7%]" />
+              <col className="w-[22%] min-w-[300px]" />
               <col className="w-[5%]" />
-              <col className="w-[8%]" />
-              <col className="w-[6%]" />
-              <col className="w-[6%]" />
-              <col className="w-[7%]" />
               <col className="w-[7%]" />
               <col className="w-[6%]" />
-              <col className="w-[25%]" />
+              <col className="w-[6%]" />
+              <col className="w-[3%]" />
+              <col className="w-[6%]" />
+              <col className="w-[5%]" />
+              <col className="w-[5%]" />
+              <col className="w-[5%]" />
+              <col className="w-[7%]" />
+              <col className="w-[10%]" />
             </colgroup>
-            <thead className="bg-slate-50 text-[11px] text-slate-500">
-              <tr>
-                <th className="px-2 py-1.5 font-semibold">브랜드</th>
+            <thead className="text-[11px] text-slate-500">
+              <tr className="border-b border-slate-200">
+                <th
+                  colSpan={4}
+                  className="bg-white px-2 py-1.5 text-center text-[10px] font-bold tracking-wide text-slate-600"
+                >
+                  제품 정보
+                </th>
+                <th
+                  colSpan={4}
+                  className="border-r-2 border-l-2 border-gray-300 bg-slate-100/80 px-1 py-1.5 text-center text-[10px] font-bold tracking-wide text-slate-700"
+                >
+                  재고 관리
+                </th>
+                <th
+                  colSpan={4}
+                  className="border-r-2 border-gray-300 bg-emerald-50/60 px-1 py-1.5 text-center text-[10px] font-bold tracking-wide text-emerald-800"
+                >
+                  판매 기록
+                </th>
+                <th
+                  rowSpan={2}
+                  className="bg-white px-1.5 py-1.5 text-center align-middle font-semibold"
+                >
+                  관리
+                </th>
+              </tr>
+              <tr className="bg-slate-50/80">
+                <th className="whitespace-nowrap px-2 py-1.5 font-semibold">
+                  브랜드
+                </th>
                 <th className="px-2 py-1.5 font-semibold">제품명</th>
-                <th className="px-1.5 py-1.5 font-semibold">구분</th>
-                <th className="px-1.5 py-1.5 text-right font-semibold">가격</th>
-                <th className="px-1.5 py-1.5 text-right font-semibold">샵</th>
-                <th className="px-1.5 py-1.5 text-right font-semibold">백업</th>
-                <th className="bg-sky-100/80 px-1.5 py-1.5 text-right font-bold text-sky-900">
-                  총재고
+                <th className="whitespace-nowrap px-1 py-1.5 text-center font-semibold">
+                  구분
                 </th>
-                <th className="bg-emerald-50 px-1.5 py-1.5 text-right font-bold text-emerald-800">
-                  판매
+                <th className="whitespace-nowrap border-r-2 border-gray-300 px-1 py-1.5 text-center font-semibold">
+                  가격
                 </th>
-                <th className="px-1.5 py-1.5 text-right font-semibold">권장</th>
-                <th className="px-1.5 py-1.5 text-center font-semibold">관리</th>
+                <th className="whitespace-nowrap bg-slate-50/50 px-0.5 py-1.5 text-center font-semibold text-violet-700">
+                  초기
+                </th>
+                <th className="whitespace-nowrap bg-slate-50/50 px-0.5 py-1.5 text-center font-semibold">
+                  백업
+                </th>
+                <th className="w-8 whitespace-nowrap bg-slate-50/50 px-0 py-1.5 text-center font-semibold">
+                  <span className="sr-only">이동</span>
+                </th>
+                <th className="whitespace-nowrap border-r-2 border-gray-300 bg-slate-50/50 px-0.5 py-1.5 text-center font-semibold">
+                  샵
+                </th>
+                <th className="whitespace-nowrap bg-emerald-50/30 px-0.5 py-1.5 text-center font-semibold text-slate-600">
+                  1일차
+                </th>
+                <th className="whitespace-nowrap bg-emerald-50/30 px-0.5 py-1.5 text-center font-semibold text-slate-600">
+                  2일차
+                </th>
+                <th className="whitespace-nowrap bg-emerald-50/30 px-0.5 py-1.5 text-center font-semibold text-slate-600">
+                  3일차
+                </th>
+                <th className="whitespace-nowrap border-r-2 border-gray-300 bg-emerald-50/50 px-0.5 py-1.5 text-center font-bold text-emerald-800">
+                  총판매
+                </th>
               </tr>
             </thead>
             <tbody>
               {filteredRows.length === 0 ? (
                 <tr>
                   <td
-                    colSpan={10}
+                    colSpan={13}
                     className="px-2 py-12 text-center text-sm text-slate-500"
                   >
                     조건에 맞는 제품이 없습니다.
@@ -1019,33 +1121,23 @@ export default function InventoryDashboard() {
                 </tr>
               ) : (
                 filteredRows.map((row) => {
-                  const recommended = getRecommendedSales(
-                    row.totalQty,
-                    eventDay
-                  );
-
                   return (
                     <tr
                       key={row.id}
-                      className="border-t border-slate-100 transition hover:bg-slate-50/80"
+                      className="border-t border-slate-100 transition hover:bg-slate-50/60"
                     >
-                      <td className="px-2 py-1 font-medium text-slate-700">
-                        <span className="block truncate" title={row.brand}>
-                          {row.brand}
-                        </span>
+                      <td className="whitespace-nowrap px-2 py-1.5 align-top font-medium text-slate-700">
+                        {row.brand}
                       </td>
-                      <td className="px-2 py-1">
-                        <div className="flex min-w-0 items-center gap-1">
-                          <span
-                            className="truncate font-semibold text-slate-900"
-                            title={row.name}
-                          >
+                      <td className="min-w-[300px] px-2 py-1.5 align-top">
+                        <div className="flex items-start gap-1.5">
+                          <span className="whitespace-normal break-words font-semibold leading-snug text-slate-900">
                             {row.name}
                           </span>
                           <StockStatusBadge totalQty={row.totalQty} />
                         </div>
                       </td>
-                      <td className="px-1.5 py-1">
+                      <td className="whitespace-nowrap px-1 py-1.5 text-center align-top">
                         <span
                           className={[
                             "inline-flex rounded px-1.5 py-0.5 text-[10px] font-semibold",
@@ -1061,71 +1153,99 @@ export default function InventoryDashboard() {
                         productId={row.id}
                         price={row.price}
                         onUpdated={handlePriceUpdated}
+                        cellClassName="border-r-2 border-gray-300 align-top"
                       />
-                      <EditableQtyCell
-                        productId={row.id}
-                        field="storage_qty"
-                        value={row.storageQty}
-                        label="샵 재고"
-                        onUpdated={handleQtyUpdated}
-                      />
+                      <td
+                        className="w-16 whitespace-nowrap bg-slate-50/50 px-0.5 py-1.5 text-center align-top tabular-nums font-bold text-violet-800"
+                        title="샵 + 백업 + 총 판매량"
+                      >
+                        {row.initialQty}
+                      </td>
                       <EditableQtyCell
                         productId={row.id}
                         field="backup_qty"
                         value={row.backupQty}
                         label="백업 재고"
                         onUpdated={handleQtyUpdated}
+                        cellClassName="bg-slate-50/50 align-top"
                       />
-                      <td className="bg-sky-50/70 px-1.5 py-1 text-right tabular-nums text-sm font-extrabold text-sky-950">
-                        {row.totalQty}
+                      <td className="w-8 bg-slate-50/50 px-0 py-1.5 text-center align-top">
+                        <button
+                          type="button"
+                          onClick={() => setMoveTarget(row)}
+                          title="백업 ↔ 샵 재고 이동"
+                          aria-label={`${row.name} 재고 이동`}
+                          className="inline-flex h-7 w-7 items-center justify-center rounded text-slate-400 transition hover:bg-white/80 hover:text-slate-700 active:bg-slate-200"
+                        >
+                          <svg
+                            xmlns="http://www.w3.org/2000/svg"
+                            viewBox="0 0 24 24"
+                            fill="none"
+                            stroke="currentColor"
+                            strokeWidth="2"
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                            className="h-3.5 w-3.5"
+                            aria-hidden="true"
+                          >
+                            <path d="m16 3 4 4-4 4" />
+                            <path d="M20 7H4" />
+                            <path d="m8 21-4-4 4-4" />
+                            <path d="M4 17h16" />
+                          </svg>
+                        </button>
                       </td>
-                      <td className="bg-emerald-50/60 px-1.5 py-1 text-right tabular-nums font-bold text-emerald-700">
+                      <EditableQtyCell
+                        productId={row.id}
+                        field="storage_qty"
+                        value={row.storageQty}
+                        label="샵 재고"
+                        onUpdated={handleQtyUpdated}
+                        cellClassName="border-r-2 border-gray-300 bg-slate-50/50 align-top"
+                      />
+                      <td className="w-14 whitespace-nowrap bg-emerald-50/30 px-0.5 py-1.5 text-center align-top tabular-nums text-slate-700">
+                        {row.soldDay1 || "—"}
+                      </td>
+                      <td className="w-14 whitespace-nowrap bg-emerald-50/30 px-0.5 py-1.5 text-center align-top tabular-nums text-slate-700">
+                        {row.soldDay2 || "—"}
+                      </td>
+                      <td className="w-14 whitespace-nowrap bg-emerald-50/30 px-0.5 py-1.5 text-center align-top tabular-nums text-slate-700">
+                        {row.soldDay3 || "—"}
+                      </td>
+                      <td className="w-16 whitespace-nowrap border-r-2 border-gray-300 bg-emerald-50/50 px-0.5 py-1.5 text-center align-top tabular-nums font-bold text-emerald-700">
                         {row.soldQty}
                       </td>
-                      <td className="px-1.5 py-1 text-right tabular-nums font-semibold text-slate-700">
-                        {recommended}
-                      </td>
-                      <td className="px-2 py-1.5">
-                        <div className="flex items-center justify-between gap-3">
+                      <td className="whitespace-nowrap px-1.5 py-1.5 align-top">
+                        <div className="flex items-center justify-center gap-1">
                           <button
                             type="button"
                             onClick={() => setSaleTarget(row)}
-                            className="min-h-11 min-w-[4.5rem] rounded-xl bg-emerald-600 px-4 py-2 text-sm font-bold text-white shadow-sm transition hover:bg-emerald-700 active:bg-emerald-800"
+                            className="min-h-8 rounded-lg bg-emerald-600 px-2.5 py-1 text-xs font-bold text-white shadow-sm transition hover:bg-emerald-700"
                           >
                             판매
                           </button>
-
-                          <div className="flex items-center gap-1.5 pl-2">
-                            <button
-                              type="button"
-                              onClick={() => setMoveTarget(row)}
-                              className="rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-[11px] font-semibold text-slate-600 transition hover:bg-slate-50"
+                          <button
+                            type="button"
+                            disabled={deletingId === row.id}
+                            onClick={() => void handleDelete(row)}
+                            className="rounded-lg p-1.5 text-rose-300 transition hover:bg-rose-50 hover:text-rose-400 disabled:opacity-60"
+                            title="삭제"
+                            aria-label="삭제"
+                          >
+                            <svg
+                              xmlns="http://www.w3.org/2000/svg"
+                              viewBox="0 0 20 20"
+                              fill="currentColor"
+                              className="h-3.5 w-3.5"
+                              aria-hidden="true"
                             >
-                              이동
-                            </button>
-                            <button
-                              type="button"
-                              disabled={deletingId === row.id}
-                              onClick={() => void handleDelete(row)}
-                              className="ml-1 rounded-lg p-1.5 text-rose-300 transition hover:bg-rose-50 hover:text-rose-400 disabled:opacity-60"
-                              title="삭제"
-                              aria-label="삭제"
-                            >
-                              <svg
-                                xmlns="http://www.w3.org/2000/svg"
-                                viewBox="0 0 20 20"
-                                fill="currentColor"
-                                className="h-3.5 w-3.5"
-                                aria-hidden="true"
-                              >
-                                <path
-                                  fillRule="evenodd"
-                                  d="M8.75 1A2.75 2.75 0 006 3.75v.443c-.795.077-1.584.176-2.365.298a.75.75 0 10.23 1.482l.149-.022.841 10.518A2.75 2.75 0 007.596 19h4.807a2.75 2.75 0 002.742-2.53l.841-10.52.149.023a.75.75 0 00.23-1.482A41.03 41.03 0 0014 4.193v-.443A2.75 2.75 0 0011.25 1h-2.5zM10 4c.784 0 1.559.02 2.319.06V3.75c0-.69-.56-1.25-1.25-1.25h-2.5c-.69 0-1.25.56-1.25 1.25v.31A41.4 41.4 0 0110 4zM8.58 7.72a.75.75 0 00-1.5.06l.3 7.5a.75.75 0 001.498-.06l-.3-7.5zm4.34.06a.75.75 0 10-1.498-.06l-.3 7.5a.75.75 0 101.498.06l.3-7.5z"
-                                  clipRule="evenodd"
-                                />
-                              </svg>
-                            </button>
-                          </div>
+                              <path
+                                fillRule="evenodd"
+                                d="M8.75 1A2.75 2.75 0 006 3.75v.443c-.795.077-1.584.176-2.365.298a.75.75 0 10.23 1.482l.149-.022.841 10.518A2.75 2.75 0 007.596 19h4.807a2.75 2.75 0 002.742-2.53l.841-10.52.149.023a.75.75 0 00.23-1.482A41.03 41.03 0 0014 4.193v-.443A2.75 2.75 0 0011.25 1h-2.5zM10 4c.784 0 1.559.02 2.319.06V3.75c0-.69-.56-1.25-1.25-1.25h-2.5c-.69 0-1.25.56-1.25 1.25v.31A41.4 41.4 0 0110 4zM8.58 7.72a.75.75 0 00-1.5.06l.3 7.5a.75.75 0 001.498-.06l-.3-7.5zm4.34.06a.75.75 0 10-1.498-.06l.3 7.5a.75.75 0 101.498.06l.3-7.5z"
+                                clipRule="evenodd"
+                              />
+                            </svg>
+                          </button>
                         </div>
                       </td>
                     </tr>

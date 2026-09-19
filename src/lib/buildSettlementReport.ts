@@ -10,6 +10,9 @@ export type SettlementLineItem = {
   brand: string;
   quantity: number;
   revenue: number;
+  day1Sales: number;
+  day2Sales: number;
+  day3Sales: number;
 };
 
 export type SettlementReportData = {
@@ -57,6 +60,9 @@ function aggregateLines(logs: SaleLogWithProduct[]): SettlementLineItem[] {
     if (existing) {
       existing.quantity += log.quantity;
       existing.revenue += log.totalPrice;
+      if (log.dayNumber === 1) existing.day1Sales += log.quantity;
+      else if (log.dayNumber === 2) existing.day2Sales += log.quantity;
+      else if (log.dayNumber === 3) existing.day3Sales += log.quantity;
     } else {
       map.set(log.productId, {
         productId: log.productId,
@@ -64,6 +70,9 @@ function aggregateLines(logs: SaleLogWithProduct[]): SettlementLineItem[] {
         brand: log.brand,
         quantity: log.quantity,
         revenue: log.totalPrice,
+        day1Sales: log.dayNumber === 1 ? log.quantity : 0,
+        day2Sales: log.dayNumber === 2 ? log.quantity : 0,
+        day3Sales: log.dayNumber === 3 ? log.quantity : 0,
       });
     }
   }
@@ -80,16 +89,17 @@ export async function buildSettlementReport(
 ): Promise<SettlementReportData> {
   const allLogs = await fetchSaleLogsWithProducts();
 
-  const logs =
+  // KPI는 scope에 따라, 상세 테이블은 항상 1~3일차 피벗 (전체 로그 기준)
+  const kpiLogs =
     scope === "today"
       ? allLogs.filter((log) => log.dayNumber === eventDay)
       : allLogs;
 
-  const details = aggregateLines(logs);
-  const bestsellers = details.slice(0, 5);
-  const totalRevenue = logs.reduce((sum, log) => sum + log.totalPrice, 0);
-  const totalQuantity = logs.reduce((sum, log) => sum + log.quantity, 0);
-  const paymentCount = countPayments(logs);
+  const details = aggregateLines(allLogs).slice(0, 10);
+  const bestsellers = aggregateLines(kpiLogs).slice(0, 5);
+  const totalRevenue = kpiLogs.reduce((sum, log) => sum + log.totalPrice, 0);
+  const totalQuantity = kpiLogs.reduce((sum, log) => sum + log.quantity, 0);
+  const paymentCount = countPayments(kpiLogs);
 
   return {
     scope,

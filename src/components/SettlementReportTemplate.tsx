@@ -264,8 +264,8 @@ const SettlementReportTemplate = forwardRef<HTMLDivElement, Props>(
                 style={{
                   width: "100%",
                   borderCollapse: "collapse",
-                  fontSize: "12px",
-                  lineHeight: 1.5,
+                  fontSize: "10.5px",
+                  lineHeight: 1.4,
                   color: "#111827",
                 }}
               >
@@ -280,6 +280,7 @@ const SettlementReportTemplate = forwardRef<HTMLDivElement, Props>(
                         paddingTop: "6px",
                         paddingBottom: "8px",
                         color: "#111827",
+                        width: "28%",
                       }}
                     >
                       제품명
@@ -290,13 +291,55 @@ const SettlementReportTemplate = forwardRef<HTMLDivElement, Props>(
                         textAlign: "center",
                         fontWeight: 700,
                         borderBottom: "2px solid #111827",
-                        paddingTop: "6px",
-                        paddingBottom: "8px",
-                        width: "88px",
+                        paddingTop: "4px",
+                        paddingBottom: "6px",
+                        width: "9%",
                         color: "#111827",
                       }}
                     >
-                      판매 수량
+                      1일차
+                    </th>
+                    <th
+                      style={{
+                        ...textBase,
+                        textAlign: "center",
+                        fontWeight: 700,
+                        borderBottom: "2px solid #111827",
+                        paddingTop: "4px",
+                        paddingBottom: "6px",
+                        width: "9%",
+                        color: "#111827",
+                      }}
+                    >
+                      2일차
+                    </th>
+                    <th
+                      style={{
+                        ...textBase,
+                        textAlign: "center",
+                        fontWeight: 700,
+                        borderBottom: "2px solid #111827",
+                        paddingTop: "4px",
+                        paddingBottom: "6px",
+                        width: "9%",
+                        color: "#111827",
+                      }}
+                    >
+                      3일차
+                    </th>
+                    <th
+                      style={{
+                        ...textBase,
+                        textAlign: "center",
+                        fontWeight: 700,
+                        borderBottom: "2px solid #111827",
+                        paddingTop: "4px",
+                        paddingBottom: "6px",
+                        width: "12%",
+                        color: "#111827",
+                      }}
+                    >
+                      총 판매량
                     </th>
                     <th
                       style={{
@@ -304,9 +347,9 @@ const SettlementReportTemplate = forwardRef<HTMLDivElement, Props>(
                         textAlign: "right",
                         fontWeight: 700,
                         borderBottom: "2px solid #111827",
-                        paddingTop: "6px",
-                        paddingBottom: "8px",
-                        width: "120px",
+                        paddingTop: "4px",
+                        paddingBottom: "6px",
+                        width: "22%",
                         color: "#111827",
                       }}
                     >
@@ -341,6 +384,45 @@ const SettlementReportTemplate = forwardRef<HTMLDivElement, Props>(
                           fontWeight: 600,
                         }}
                       >
+                        {item.day1Sales > 0 ? formatNumber(item.day1Sales) : "—"}
+                      </td>
+                      <td
+                        style={{
+                          ...textBase,
+                          textAlign: "center",
+                          borderBottom: "1px solid #e5e7eb",
+                          paddingTop: "8px",
+                          paddingBottom: "8px",
+                          color: "#374151",
+                          fontWeight: 600,
+                        }}
+                      >
+                        {item.day2Sales > 0 ? formatNumber(item.day2Sales) : "—"}
+                      </td>
+                      <td
+                        style={{
+                          ...textBase,
+                          textAlign: "center",
+                          borderBottom: "1px solid #e5e7eb",
+                          paddingTop: "8px",
+                          paddingBottom: "8px",
+                          color: "#374151",
+                          fontWeight: 600,
+                        }}
+                      >
+                        {item.day3Sales > 0 ? formatNumber(item.day3Sales) : "—"}
+                      </td>
+                      <td
+                        style={{
+                          ...textBase,
+                          textAlign: "center",
+                          borderBottom: "1px solid #e5e7eb",
+                          paddingTop: "8px",
+                          paddingBottom: "8px",
+                          color: "#047857",
+                          fontWeight: 700,
+                        }}
+                      >
                         {formatNumber(item.quantity)}
                       </td>
                       <td
@@ -361,6 +443,19 @@ const SettlementReportTemplate = forwardRef<HTMLDivElement, Props>(
                 </tbody>
               </table>
             )}
+            {report.details.length > 0 ? (
+              <p
+                style={{
+                  ...textBase,
+                  marginTop: "8px",
+                  marginBottom: 0,
+                  fontSize: "9px",
+                  color: "#9ca3af",
+                }}
+              >
+                ※ 상위 10개 품목만 표시됩니다.
+              </p>
+            ) : null}
           </section>
 
           <footer
