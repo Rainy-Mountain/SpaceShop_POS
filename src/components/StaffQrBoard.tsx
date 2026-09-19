@@ -7,6 +7,7 @@ import {
   deleteQueueEntry,
   sendOrderToPos,
   SMART_ORDER_TRUNCATE_HINT,
+  updateQueueNumber,
 } from "@/lib/orderActions";
 import { getSupabase } from "@/lib/supabase";
 
@@ -162,6 +163,7 @@ export default function StaffQrBoard() {
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [sendingId, setSendingId] = useState<string | null>(null);
   const [admittingId, setAdmittingId] = useState<string | null>(null);
+  const [renumberingId, setRenumberingId] = useState<string | null>(null);
   const [clearingAll, setClearingAll] = useState(false);
 
   useEffect(() => {
@@ -230,7 +232,13 @@ export default function StaffQrBoard() {
 
       const mapped = (data ?? [])
         .map((row) => mapQueueRow(row))
-        .filter((entry) => !entry.hideFromBoard);
+        .filter((entry) => !entry.hideFromBoard)
+        .sort((a, b) => {
+          if (a.queueNumber !== b.queueNumber) {
+            return a.queueNumber - b.queueNumber;
+          }
+          return a.createdAt.localeCompare(b.createdAt);
+        });
 
       setEntries(mapped);
     } catch (err) {
@@ -360,6 +368,51 @@ export default function StaffQrBoard() {
       void loadQueues({ silent: true });
     } finally {
       setAdmittingId(null);
+    }
+  }
+
+  async function handleChangeQueueNumber(entry: QueueEntry) {
+    const raw = window.prompt(
+      "변경할 새로운 순번을 입력하세요 (숫자만 입력):",
+      String(entry.queueNumber)
+    );
+    if (raw == null) return;
+
+    const nextNumber = Number(String(raw).trim());
+    if (!Number.isInteger(nextNumber) || nextNumber < 1) {
+      window.alert("1 이상의 정수 순번을 입력해 주세요.");
+      return;
+    }
+    if (nextNumber === entry.queueNumber) return;
+
+    const ok = window.confirm(
+      `${entry.queueNumber}번 손님을 ${nextNumber}번으로 변경하시겠습니까?`
+    );
+    if (!ok) return;
+
+    setRenumberingId(entry.id);
+    try {
+      await updateQueueNumber(entry.id, nextNumber);
+      setEntries((prev) =>
+        [...prev]
+          .map((row) =>
+            row.id === entry.id ? { ...row, queueNumber: nextNumber } : row
+          )
+          .sort((a, b) => {
+            if (a.queueNumber !== b.queueNumber) {
+              return a.queueNumber - b.queueNumber;
+            }
+            return a.createdAt.localeCompare(b.createdAt);
+          })
+      );
+    } catch (err) {
+      console.error("[StaffQrBoard] updateQueueNumber 실패", err);
+      const message =
+        err instanceof Error ? err.message : "순번 변경에 실패했습니다.";
+      window.alert(message);
+      void loadQueues({ silent: true });
+    } finally {
+      setRenumberingId(null);
     }
   }
 
@@ -686,6 +739,17 @@ export default function StaffQrBoard() {
                                     : "포스기로 넘기기"}
                                 </button>
                               )}
+                            <button
+                              type="button"
+                              disabled={renumberingId === entry.id}
+                              onClick={() => void handleChangeQueueNumber(entry)}
+                              className="text-[11px] font-medium text-gray-400 transition hover:text-sky-600 disabled:opacity-40"
+                              title="순번 변경"
+                            >
+                              {renumberingId === entry.id
+                                ? "변경 중…"
+                                : "✏️ 순번 변경"}
+                            </button>
                             <button
                               type="button"
                               disabled={deletingId === entry.id}

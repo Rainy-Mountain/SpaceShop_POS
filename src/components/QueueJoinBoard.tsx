@@ -4,20 +4,27 @@ import { useState, type FormEvent } from "react";
 import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabase";
 
+const PHONE_TAIL_RE = /^\d{4}$/;
+
 /**
- * 손님용 — 성함 입력 후 순번 발급 → /order?queue_id=…
+ * 손님용 — 핸드폰 뒷자리 4자리로 이어하기 또는 신규 순번 발급 → /order?queue_id=…
  */
 export default function QueueJoinBoard() {
   const router = useRouter();
-  const [name, setName] = useState("");
+  const [phoneTail, setPhoneTail] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  function handlePhoneChange(raw: string) {
+    const digits = raw.replace(/\D/g, "").slice(0, 4);
+    setPhoneTail(digits);
+  }
+
   async function handleSubmit(event: FormEvent) {
     event.preventDefault();
-    const customerName = name.trim();
-    if (!customerName) {
-      setError("성함을 입력해 주세요.");
+    const digits = phoneTail.trim();
+    if (!PHONE_TAIL_RE.test(digits)) {
+      setError("핸드폰 번호 뒷자리 4자리를 숫자로 입력해 주세요.");
       return;
     }
 
@@ -25,6 +32,25 @@ export default function QueueJoinBoard() {
     setError(null);
 
     try {
+      // 1) 동일 뒷자리 + 미완료(completed/cancelled 제외) 대기열 → 이어하기
+      const { data: existing, error: existingError } = await supabase
+        .from("queues")
+        .select("id, status")
+        .eq("customer_name", digits)
+        .neq("status", "completed")
+        .neq("status", "cancelled")
+        .order("created_at", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+
+      if (existingError) throw existingError;
+
+      if (existing?.id) {
+        router.push(`/order?queue_id=${existing.id}`);
+        return;
+      }
+
+      // 2) 신규 발급
       const { data: maxRows, error: maxError } = await supabase
         .from("queues")
         .select("queue_number")
@@ -43,7 +69,7 @@ export default function QueueJoinBoard() {
         .from("queues")
         .insert({
           queue_number: nextNumber,
-          customer_name: customerName,
+          customer_name: digits,
           status: "waiting",
         })
         .select("id")
@@ -69,6 +95,8 @@ export default function QueueJoinBoard() {
     }
   }
 
+  const isValid = PHONE_TAIL_RE.test(phoneTail.trim());
+
   return (
     <main className="flex min-h-screen flex-col bg-gray-50 px-4 py-10">
       <div className="mx-auto w-full max-w-md">
@@ -77,7 +105,7 @@ export default function QueueJoinBoard() {
             {"스페이스 샵 4주년\n스마트 오더 입장"}
           </h1>
           <p className="mt-2 text-sm text-gray-500">
-            성함을 입력하시면 대기 순번이 발급됩니다.
+            핸드폰 뒷자리 4자리로 입장하거나, 이어서 주문하세요.
           </p>
         </div>
 
@@ -87,17 +115,20 @@ export default function QueueJoinBoard() {
         >
           <label className="block">
             <span className="mb-1.5 block text-sm font-medium text-gray-700">
-              성함
+              핸드폰 번호 뒷자리 4자리
             </span>
             <input
-              type="text"
-              value={name}
-              onChange={(event) => setName(event.target.value)}
+              type="tel"
+              inputMode="numeric"
+              pattern="[0-9]*"
+              maxLength={4}
+              value={phoneTail}
+              onChange={(event) => handlePhoneChange(event.target.value)}
               disabled={loading}
-              placeholder="예: 홍길동"
-              autoComplete="name"
+              placeholder="예: 1234"
+              autoComplete="tel-national"
               autoFocus
-              className="w-full rounded-xl border border-gray-200 bg-white px-4 py-3 text-base text-gray-900 outline-none placeholder:text-gray-400 focus:border-sky-500 disabled:opacity-60"
+              className="w-full rounded-xl border border-gray-200 bg-white px-4 py-3 text-center text-2xl font-bold tracking-[0.35em] text-gray-900 outline-none placeholder:text-base placeholder:font-normal placeholder:tracking-normal placeholder:text-gray-400 focus:border-sky-500 disabled:opacity-60"
             />
           </label>
 
@@ -112,10 +143,10 @@ export default function QueueJoinBoard() {
 
           <button
             type="submit"
-            disabled={loading || !name.trim()}
+            disabled={loading || !isValid}
             className="w-full rounded-xl bg-sky-600 px-4 py-3.5 text-base font-bold text-white transition hover:bg-sky-500 disabled:cursor-not-allowed disabled:bg-gray-300"
           >
-            {loading ? "발급 중..." : "순번 발급받고 입장하기"}
+            {loading ? "확인 중..." : "입장하기"}
           </button>
         </form>
       </div>

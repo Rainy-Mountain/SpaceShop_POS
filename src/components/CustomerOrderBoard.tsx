@@ -5,6 +5,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { fetchInventoryDashboardData } from "@/lib/fetchInventory";
 import { getBrandInitialKey, KOREAN_INITIALS } from "@/lib/koreanInitial";
 import {
+  hasPaidOrderForQueue,
   loadActiveOrderForQueue,
   revertOrderToShopping,
   syncShoppingCart,
@@ -390,47 +391,60 @@ export default function CustomerOrderBoard() {
 
     let cancelled = false;
 
+    function hydrateItems(
+      items: CartItem[],
+      rows: DashboardRow[]
+    ): CartItem[] {
+      return items.map((item) => {
+        const row = rows.find((p) => p.id === item.productId);
+        return {
+          ...item,
+          brand: row?.brand || item.brand || "",
+          name: row?.name || item.name,
+          price: row?.price ?? item.price,
+        };
+      });
+    }
+
     async function load() {
       setLoading(true);
       setError(null);
 
-      // 1) localStorage 즉시 복구 (새로고침 체감 개선)
+      // 1) localStorage 즉시 복구 (체감 개선 — 이후 DB가 있으면 덮어씀)
       const cached = readCartFromStorage(activeQueueId);
       if (cached && cached.length > 0) {
         setCart(cached);
       }
 
       try {
-        const [data, activeOrder] = await Promise.all([
+        const [data, activeOrder, paid] = await Promise.all([
           fetchInventoryDashboardData(undefined, { orderBy: "created" }),
           loadActiveOrderForQueue(activeQueueId),
+          hasPaidOrderForQueue(activeQueueId),
         ]);
         if (cancelled) return;
         setProducts(data.rows);
 
-        if (activeOrder) {
-          // 2) DB(shopping/pending)가 있으면 최종 소스로 덮어씀
-          const hydrated = activeOrder.items.map((item) => {
-            const row = data.rows.find((p) => p.id === item.productId);
-            return {
-              ...item,
-              brand: row?.brand || item.brand || "",
-              name: row?.name || item.name,
-              price: row?.price ?? item.price,
-            };
-          });
+        // 결제 완료된 대기열이면 완료 화면만 표시
+        if (paid && !activeOrder) {
+          setSubmitted(true);
+          setIsPaid(true);
+          setCart([]);
+          clearCartStorage(activeQueueId);
+          return;
+        }
 
-          if (hydrated.length === 0 && cached && cached.length > 0) {
-            // DB 품목이 비어 있고 캐시만 있으면 캐시 유지 + shopping 재동기화
-            const hydratedCache = cached.map((item) => {
-              const row = data.rows.find((p) => p.id === item.productId);
-              return {
-                ...item,
-                brand: row?.brand || item.brand || "",
-                name: row?.name || item.name,
-                price: row?.price ?? item.price,
-              };
-            });
+        if (activeOrder) {
+          setSubmittedOrderId(activeOrder.orderId);
+
+          // 2) DB(shopping/pending) 품목이 최종 소스 — 화면 껐다 켜도 복구
+          if (activeOrder.items.length > 0) {
+            const hydrated = hydrateItems(activeOrder.items, data.rows);
+            setCart(hydrated);
+            setReceiptItems(hydrated);
+            writeCartToStorage(activeQueueId, hydrated);
+          } else if (cached && cached.length > 0) {
+            const hydratedCache = hydrateItems(cached, data.rows);
             setCart(hydratedCache);
             writeCartToStorage(activeQueueId, hydratedCache);
             if (activeOrder.status === "shopping") {
@@ -441,33 +455,26 @@ export default function CustomerOrderBoard() {
                 .catch(console.error);
             }
           } else {
-            setCart(hydrated);
-            setReceiptItems(hydrated);
-            writeCartToStorage(activeQueueId, hydrated);
+            setCart([]);
+            clearCartStorage(activeQueueId);
           }
 
-          setSubmittedOrderId(activeOrder.orderId);
           if (activeOrder.status === "pending") {
             setSubmitted(true);
-            setReceiptItems((prev) =>
-              prev.length > 0
-                ? prev
-                : hydrated.length > 0
-                  ? hydrated
-                  : (cached ?? [])
-            );
+            setReceiptItems((prev) => {
+              if (prev.length > 0) return prev;
+              if (activeOrder.items.length > 0) {
+                return hydrateItems(activeOrder.items, data.rows);
+              }
+              return cached ?? [];
+            });
+          } else if (activeOrder.status === "shopping") {
+            setSubmitted(false);
+            setIsPaid(false);
           }
         } else if (cached && cached.length > 0) {
-          // 3) DB에 주문 없고 캐시만 있으면 shopping 주문으로 재동기화
-          const hydratedCache = cached.map((item) => {
-            const row = data.rows.find((p) => p.id === item.productId);
-            return {
-              ...item,
-              brand: row?.brand || item.brand || "",
-              name: row?.name || item.name,
-              price: row?.price ?? item.price,
-            };
-          });
+          // 3) DB 주문 없고 캐시만 있으면 shopping으로 재동기화
+          const hydratedCache = hydrateItems(cached, data.rows);
           setCart(hydratedCache);
           void syncShoppingCart(activeQueueId, hydratedCache)
             .then(({ orderId }) => {
@@ -1392,7 +1399,7 @@ export default function CustomerOrderBoard() {
                 </span>
               </p>
               <p className="mt-1 truncate text-lg font-bold text-sky-50 sm:text-xl">
-                이름: {customerName || "손님"} 님
+                뒷자리: {customerName || "----"}
               </p>
             </div>
             <button

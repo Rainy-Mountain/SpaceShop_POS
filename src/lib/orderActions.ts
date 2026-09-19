@@ -247,7 +247,7 @@ export async function revertOrderToShopping(orderId: string): Promise<void> {
   }
 }
 
-/** 대기열의 활성 주문(shopping | pending) + 품목 로드 */
+/** 대기열의 활성 주문(shopping | pending) + 품목 로드 (이어하기/새로고침 복구용) */
 export async function loadActiveOrderForQueue(queueId: string): Promise<{
   orderId: string;
   status: string;
@@ -255,29 +255,33 @@ export async function loadActiveOrderForQueue(queueId: string): Promise<{
 } | null> {
   if (!queueId) return null;
 
-  const { data, error } = await supabase
+  const { data: order, error: orderError } = await supabase
     .from("orders")
-    .select(
-      `
-      id,
-      status,
-      order_items ( product_id, quantity, product_name )
-    `
-    )
+    .select("id, status")
     .eq("queue_id", queueId)
     .in("status", ["shopping", "pending"])
     .order("created_at", { ascending: false })
     .limit(1)
     .maybeSingle();
 
-  if (error) {
-    console.error("[loadActiveOrderForQueue] 실패", error);
-    throw new Error(error.message || "주문 조회 실패");
+  if (orderError) {
+    console.error("[loadActiveOrderForQueue] orders 실패", orderError);
+    throw new Error(orderError.message || "주문 조회 실패");
   }
-  if (!data) return null;
+  if (!order?.id) return null;
 
-  const itemsRaw = Array.isArray(data.order_items) ? data.order_items : [];
-  const items: CartItem[] = itemsRaw.map((item) => ({
+  const orderId = String(order.id);
+  const { data: itemsRaw, error: itemsError } = await supabase
+    .from("order_items")
+    .select("product_id, quantity, product_name")
+    .eq("order_id", orderId);
+
+  if (itemsError) {
+    console.error("[loadActiveOrderForQueue] order_items 실패", itemsError);
+    throw new Error(itemsError.message || "품목 조회 실패");
+  }
+
+  const items: CartItem[] = (itemsRaw ?? []).map((item) => ({
     productId: String(item.product_id),
     name: String(item.product_name ?? "제품"),
     brand: "",
@@ -285,10 +289,53 @@ export async function loadActiveOrderForQueue(queueId: string): Promise<{
   }));
 
   return {
-    orderId: String(data.id),
-    status: String(data.status),
+    orderId,
+    status: String(order.status),
     items: items.filter((item) => item.qty > 0),
   };
+}
+
+/** 해당 대기열에 결제 완료(paid) 주문이 있는지 */
+export async function hasPaidOrderForQueue(queueId: string): Promise<boolean> {
+  if (!queueId) return false;
+  const { data, error } = await supabase
+    .from("orders")
+    .select("id")
+    .eq("queue_id", queueId)
+    .eq("status", "paid")
+    .limit(1)
+    .maybeSingle();
+  if (error) {
+    console.error("[hasPaidOrderForQueue] 실패", error);
+    return false;
+  }
+  return Boolean(data?.id);
+}
+
+/** 직원이 순번 강제 변경 */
+export async function updateQueueNumber(
+  queueId: string,
+  queueNumber: number
+): Promise<void> {
+  if (!queueId) throw new Error("대기열 ID가 없습니다.");
+  if (!Number.isFinite(queueNumber) || !Number.isInteger(queueNumber) || queueNumber < 1) {
+    throw new Error("1 이상의 정수 순번을 입력해 주세요.");
+  }
+
+  const { data, error } = await supabase
+    .from("queues")
+    .update({ queue_number: queueNumber })
+    .eq("id", queueId)
+    .select("id")
+    .maybeSingle();
+
+  if (error) {
+    console.error("[updateQueueNumber] 실패", error);
+    throw new Error(error.message || "순번 변경에 실패했습니다.");
+  }
+  if (!data) {
+    throw new Error("대기열을 찾을 수 없습니다.");
+  }
 }
 
 export type PendingPosOrderItem = {
