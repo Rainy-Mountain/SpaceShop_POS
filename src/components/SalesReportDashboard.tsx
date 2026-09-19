@@ -1,7 +1,17 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { flushSync } from "react-dom";
 import RealtimeSalesTimeline from "@/components/RealtimeSalesTimeline";
+import SettlementReportTemplate, {
+  downloadSettlementPdf,
+} from "@/components/SettlementReportTemplate";
+import { useEventDay } from "@/hooks/useEventDay";
+import {
+  buildSettlementReport,
+  type SettlementReportData,
+  type SettlementScope,
+} from "@/lib/buildSettlementReport";
 import { fetchSalesReport } from "@/lib/fetchSalesReport";
 import { supabase } from "@/lib/supabase";
 import type { SalesReportSummary } from "@/types/salesReport";
@@ -53,9 +63,14 @@ function ProgressBar({
 }
 
 export default function SalesReportDashboard() {
+  const { eventDay } = useEventDay();
   const [report, setReport] = useState<SalesReportSummary | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [settlementData, setSettlementData] =
+    useState<SettlementReportData | null>(null);
+  const [exporting, setExporting] = useState<SettlementScope | null>(null);
+  const pdfRef = useRef<HTMLDivElement>(null);
 
   async function load(options?: { silent?: boolean }) {
     if (!options?.silent) {
@@ -112,6 +127,36 @@ export default function SalesReportDashboard() {
     };
   }, []);
 
+  async function handleExportPdf(scope: SettlementScope) {
+    if (exporting) return;
+    setExporting(scope);
+    try {
+      const data = await buildSettlementReport(scope, eventDay);
+      flushSync(() => {
+        setSettlementData(data);
+      });
+
+      // React 렌더 완료 대기 후 캡처
+      await new Promise((resolve) => setTimeout(resolve, 500));
+
+      const el = pdfRef.current;
+      if (!el) {
+        throw new Error("PDF 템플릿을 찾을 수 없습니다.");
+      }
+
+      const filename =
+        scope === "today" ? "report_today.pdf" : "report_all_3days.pdf";
+      await downloadSettlementPdf(el, filename);
+    } catch (err) {
+      console.error("[Settlement PDF] 실패", err);
+      const message =
+        err instanceof Error ? err.message : "PDF 생성에 실패했습니다.";
+      window.alert(message);
+    } finally {
+      setExporting(null);
+    }
+  }
+
   const maxDayRevenue = Math.max(
     ...(report?.byDay.map((day) => day.revenue) ?? [0]),
     1
@@ -119,14 +164,38 @@ export default function SalesReportDashboard() {
   const ownPlusOther = (report?.ownRevenue ?? 0) + (report?.otherRevenue ?? 0);
 
   return (
-    <div className="mx-auto w-full max-w-7xl px-4 py-6 sm:px-6 lg:px-8">
-      <div className="mb-6">
-        <h1 className="text-2xl font-bold tracking-tight text-slate-900 sm:text-3xl">
-          매출 보고서
-        </h1>
-        <p className="mt-1 text-sm text-slate-500">
-          전체 행사 기간의 판매 기록을 종합해 실시간으로 확인하세요.
-        </p>
+    <div className="relative mx-auto w-full max-w-7xl px-4 py-6 sm:px-6 lg:px-8">
+      <div className="mb-6 flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
+        <div>
+          <h1 className="text-2xl font-bold tracking-tight text-slate-900 sm:text-3xl">
+            매출 보고서
+          </h1>
+          <p className="mt-1 text-sm text-slate-500">
+            전체 행사 기간의 판매 기록을 종합해 실시간으로 확인하세요.
+          </p>
+        </div>
+        <div className="flex flex-wrap gap-2">
+          <button
+            type="button"
+            disabled={exporting !== null}
+            onClick={() => void handleExportPdf("today")}
+            className="inline-flex items-center justify-center rounded-xl bg-sky-600 px-3.5 py-2.5 text-sm font-bold text-white shadow-sm transition hover:bg-sky-500 disabled:cursor-not-allowed disabled:bg-slate-300"
+          >
+            {exporting === "today"
+              ? "PDF 생성 중…"
+              : "📄 금일 정산 리포트 PDF"}
+          </button>
+          <button
+            type="button"
+            disabled={exporting !== null}
+            onClick={() => void handleExportPdf("all")}
+            className="inline-flex items-center justify-center rounded-xl border border-slate-300 bg-white px-3.5 py-2.5 text-sm font-bold text-slate-800 shadow-sm transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {exporting === "all"
+              ? "PDF 생성 중…"
+              : "📊 3일 전체 정산 리포트 PDF"}
+          </button>
+        </div>
       </div>
 
       {error && (
@@ -337,6 +406,14 @@ export default function SalesReportDashboard() {
           </section>
         </div>
       )}
+
+      {/* PDF 1페이지 미리보기/캡처 템플릿 — 항상 렌더 */}
+      <div className="mt-12 border-t border-slate-200 pt-6">
+        <p className="mb-3 text-xs font-medium text-slate-400">
+          PDF 미리보기 (다운로드와 동일한 1페이지 리포트)
+        </p>
+        <SettlementReportTemplate ref={pdfRef} data={settlementData} />
+      </div>
     </div>
   );
 }

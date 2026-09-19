@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { fetchSaleLogsWithProducts } from "@/lib/fetchSalesReport";
+import { undoSale } from "@/lib/inventoryActions";
 import { supabase } from "@/lib/supabase";
 import type { EventDay } from "@/types/dashboard";
 import type { SaleLogWithProduct } from "@/types/salesReport";
@@ -56,7 +57,7 @@ function groupLatestByDay(
 }
 
 /**
- * 1~3일차 가로 다단 · 고정 높이 스크롤 · sales_logs Realtime
+ * 1~3일차 가로 다단 · 고정 높이 스크롤 · sales_logs Realtime + 결제 취소
  */
 export default function RealtimeSalesTimeline() {
   const [byDay, setByDay] = useState<Record<EventDay, SaleLogWithProduct[]>>({
@@ -66,6 +67,7 @@ export default function RealtimeSalesTimeline() {
   });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [cancellingId, setCancellingId] = useState<string | null>(null);
   const [highlightIds, setHighlightIds] = useState<Set<string>>(
     () => new Set()
   );
@@ -164,6 +166,41 @@ export default function RealtimeSalesTimeline() {
     };
   }, []);
 
+  async function handleCancelSale(sale: SaleLogWithProduct) {
+    if (cancellingId) return;
+
+    const ok = window.confirm(
+      "정말 이 판매 내역을 취소하고 재고를 원복하시겠습니까?\n(취소 시 매출에서 제외되며 재고가 다시 채워집니다.)"
+    );
+    if (!ok) return;
+
+    setCancellingId(sale.id);
+
+    // 낙관적 제거 — Realtime / 요약 수치도 DELETE 이벤트로 갱신
+    setByDay((prev) => {
+      const next = { ...prev };
+      for (const day of EVENT_DAYS) {
+        next[day] = prev[day].filter((row) => row.id !== sale.id);
+      }
+      return next;
+    });
+    knownIdsRef.current.delete(sale.id);
+
+    try {
+      await undoSale(sale.id);
+      window.alert("취소 및 재고 원복이 완료되었습니다.");
+      void load({ silent: true });
+    } catch (err) {
+      console.error("[RealtimeSalesTimeline] undoSale 실패", err);
+      const message =
+        err instanceof Error ? err.message : "판매 취소에 실패했습니다.";
+      window.alert(message);
+      void load({ silent: true });
+    } finally {
+      setCancellingId(null);
+    }
+  }
+
   const dayTitles = useMemo(() => {
     return EVENT_DAYS.map((day) => {
       const sample = byDay[day][0];
@@ -225,6 +262,7 @@ export default function RealtimeSalesTimeline() {
                 <ul className="max-h-80 space-y-2 overflow-y-auto overscroll-contain pr-0.5 [-ms-overflow-style:none] [scrollbar-width:thin] [&::-webkit-scrollbar]:w-1.5 [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb]:bg-slate-300">
                   {sales.map((sale) => {
                     const isNew = highlightIds.has(sale.id);
+                    const isCancelling = cancellingId === sale.id;
                     return (
                       <li
                         key={sale.id}
@@ -250,6 +288,17 @@ export default function RealtimeSalesTimeline() {
                           <span className="shrink-0 text-xs font-semibold tabular-nums text-slate-600">
                             {sale.quantity}개
                           </span>
+                        </div>
+                        <div className="mt-1.5 flex justify-end">
+                          <button
+                            type="button"
+                            disabled={cancellingId !== null}
+                            onClick={() => void handleCancelSale(sale)}
+                            className="text-[10px] font-medium text-red-400/80 transition hover:text-red-600 disabled:opacity-40"
+                            title="판매 취소 · 재고 원복"
+                          >
+                            {isCancelling ? "취소 중…" : "취소"}
+                          </button>
                         </div>
                       </li>
                     );
