@@ -28,8 +28,16 @@ create table if not exists sales_logs (
   sold_from text not null check (sold_from in ('차량', '창고', '진열')),
   quantity integer not null check (quantity > 0),
   total_price numeric not null default 0,
+  payment_group_id uuid,
+  order_id uuid,
+  customer_name text,
   created_at timestamptz not null default now()
 );
+
+-- 결제 건 그룹화 컬럼 (기존 DB: add_sales_payment_group.sql 실행)
+-- alter table sales_logs add column if not exists payment_group_id uuid;
+-- alter table sales_logs add column if not exists order_id uuid;
+-- alter table sales_logs add column if not exists customer_name text;
 
 create table if not exists movement_logs (
   id uuid primary key default gen_random_uuid(),

@@ -599,10 +599,20 @@ export async function loadSmartOrderForKiosk(orderId: string): Promise<{
  * 1) 재고 차감
  * 2) orders → paid, queues → completed
  * 3) sales_logs INSERT
+ *
+ * @param cartItems 키오스크 최종 장바구니(수동 추가 포함). 없으면 DB order_items 사용.
  */
+export type PosPaymentCartItem = {
+  productId: string;
+  quantity: number;
+  unitPrice?: number;
+  productName?: string;
+};
+
 export async function completePosPayment(
   orderId: string,
-  dayNumber?: EventDay
+  dayNumber?: EventDay,
+  cartItems?: PosPaymentCartItem[]
 ): Promise<void> {
   if (!orderId) throw new Error("주문 ID가 없습니다.");
 
@@ -636,20 +646,44 @@ export async function completePosPayment(
     throw new Error("이미 처리된 주문입니다.");
   }
 
-  const items = Array.isArray(order.order_items) ? order.order_items : [];
-  if (items.length === 0) {
+  // 최종 장바구니(수동 추가 포함) 우선 — 없으면 DB order_items
+  const sourceItems: Array<{
+    product_id: string;
+    quantity: number;
+    product_name: string;
+    unit_price?: number;
+  }> =
+    cartItems && cartItems.length > 0
+      ? cartItems.map((item) => ({
+          product_id: String(item.productId ?? "").trim(),
+          quantity: Number(item.quantity) || 0,
+          product_name: String(item.productName ?? "제품").trim() || "제품",
+          unit_price:
+            typeof item.unitPrice === "number" && Number.isFinite(item.unitPrice)
+              ? item.unitPrice
+              : undefined,
+        }))
+      : (Array.isArray(order.order_items) ? order.order_items : []).map(
+          (item) => ({
+            product_id: String(item.product_id ?? "").trim(),
+            quantity: Number(item.quantity) || 0,
+            product_name: String(item.product_name ?? "제품").trim() || "제품",
+          })
+        );
+
+  if (sourceItems.length === 0) {
     throw new Error("주문 품목이 없습니다.");
   }
 
   // 동일 product_id 수량 합산
   const qtyByProduct = new Map<
     string,
-    { quantity: number; productName: string }
+    { quantity: number; productName: string; unitPrice?: number }
   >();
-  for (const item of items) {
-    const productId = String(item.product_id ?? "").trim();
-    const quantity = Number(item.quantity) || 0;
-    const productName = String(item.product_name ?? "제품").trim() || "제품";
+  for (const item of sourceItems) {
+    const productId = item.product_id;
+    const quantity = item.quantity;
+    const productName = item.product_name;
     if (!productId || quantity <= 0) {
       throw new Error(`잘못된 주문 품목: ${productName}`);
     }
@@ -657,7 +691,11 @@ export async function completePosPayment(
     if (prev) {
       prev.quantity += quantity;
     } else {
-      qtyByProduct.set(productId, { quantity, productName });
+      qtyByProduct.set(productId, {
+        quantity,
+        productName,
+        unitPrice: item.unit_price,
+      });
     }
   }
 
@@ -717,6 +755,10 @@ export async function completePosPayment(
     const storageQty = storageById.has(productId)
       ? (storageById.get(productId) as number)
       : null;
+    const unitPrice =
+      typeof entry.unitPrice === "number" && Number.isFinite(entry.unitPrice)
+        ? entry.unitPrice
+        : (product?.price ?? 0);
 
     if (!product) {
       throw new Error(`제품 정보를 찾을 수 없습니다 (${productName}).`);
@@ -725,7 +767,6 @@ export async function completePosPayment(
       throw new Error(`"${productName}" 재고 정보를 찾을 수 없습니다.`);
     }
     if (storageQty < entry.quantity) {
-      // 매니저 alert용 메시지 — sales_logs / 상태 변경 전 즉시 중단
       throw new Error(
         `재고가 부족하여 결제를 진행할 수 없습니다. (품목: ${productName}, 남은 재고: ${storageQty}개)`
       );
@@ -734,7 +775,7 @@ export async function completePosPayment(
     prepared.push({
       productId,
       quantity: entry.quantity,
-      unitPrice: product.price,
+      unitPrice,
       productName,
       storageQty,
     });
@@ -742,7 +783,6 @@ export async function completePosPayment(
 
   // ── 1) 재고 차감 (검증 통과 후에만) ──
   for (const item of prepared) {
-    // 차감 직전 한 번 더 최신값 확인 (동시 결제 race 방어)
     const { data: inv, error: invError } = await supabase
       .from("inventory")
       .select("storage_qty")
@@ -798,12 +838,30 @@ export async function completePosPayment(
   }
 
   // ── 3) 매출 기록 INSERT (검증·차감·상태 변경이 모두 끝난 뒤에만) ──
+  const paymentGroupId =
+    typeof crypto !== "undefined" && "randomUUID" in crypto
+      ? crypto.randomUUID()
+      : `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+
+  let customerName = "";
+  const { data: queueRow } = await supabase
+    .from("queues")
+    .select("customer_name")
+    .eq("id", order.queue_id)
+    .maybeSingle();
+  if (queueRow?.customer_name) {
+    customerName = String(queueRow.customer_name).trim();
+  }
+
   const saleRows = prepared.map((item) => ({
     product_id: item.productId,
     day_number: day,
     sold_from: "창고" as const,
     quantity: item.quantity,
     total_price: item.unitPrice * item.quantity,
+    payment_group_id: paymentGroupId,
+    order_id: orderId,
+    customer_name: customerName || null,
   }));
 
   const { error: salesError } = await supabase
@@ -811,11 +869,32 @@ export async function completePosPayment(
     .insert(saleRows);
 
   if (salesError) {
-    console.error("[completePosPayment] sales_logs insert 실패", salesError);
-    throw new Error(
-      salesError.message ||
-        "매출 기록 저장에 실패했습니다. 재고·주문 상태는 이미 반영됐을 수 있습니다."
-    );
+    // 컬럼 미마이그레이션 시 레거시 insert 폴백
+    if (/payment_group_id|customer_name|order_id/i.test(salesError.message)) {
+      const legacyRows = prepared.map((item) => ({
+        product_id: item.productId,
+        day_number: day,
+        sold_from: "창고" as const,
+        quantity: item.quantity,
+        total_price: item.unitPrice * item.quantity,
+      }));
+      const { error: legacyError } = await supabase
+        .from("sales_logs")
+        .insert(legacyRows);
+      if (legacyError) {
+        console.error("[completePosPayment] sales_logs insert 실패", legacyError);
+        throw new Error(
+          legacyError.message ||
+            "매출 기록 저장에 실패했습니다. 재고·주문 상태는 이미 반영됐을 수 있습니다."
+        );
+      }
+    } else {
+      console.error("[completePosPayment] sales_logs insert 실패", salesError);
+      throw new Error(
+        salesError.message ||
+          "매출 기록 저장에 실패했습니다. 재고·주문 상태는 이미 반영됐을 수 있습니다."
+      );
+    }
   }
 }
 

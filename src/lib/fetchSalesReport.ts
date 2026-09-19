@@ -4,6 +4,7 @@ import type {
   DaySalesStat,
   ProductSalesRank,
   SaleLogWithProduct,
+  SalePaymentGroup,
   SalesReportSummary,
 } from "@/types/salesReport";
 
@@ -19,11 +20,14 @@ function toNumber(value: unknown): number {
 export async function fetchSaleLogsWithProducts(
   dayNumber?: EventDay
 ): Promise<SaleLogWithProduct[]> {
+  const selectWithGroup =
+    "id, product_id, day_number, sold_from, quantity, total_price, created_at, payment_group_id, order_id, customer_name";
+  const selectLegacy =
+    "id, product_id, day_number, sold_from, quantity, total_price, created_at";
+
   let salesQuery = supabase
     .from("sales_logs")
-    .select(
-      "id, product_id, day_number, sold_from, quantity, total_price, created_at"
-    )
+    .select(selectWithGroup)
     .order("created_at", { ascending: false })
     .limit(1000);
 
@@ -31,10 +35,27 @@ export async function fetchSaleLogsWithProducts(
     salesQuery = salesQuery.eq("day_number", dayNumber);
   }
 
-  const [salesResult, productsResult] = await Promise.all([
-    salesQuery,
-    supabase.from("products").select("id, name, brand, company_type, price"),
-  ]);
+  let salesResult = await salesQuery;
+
+  // 마이그레이션 전 DB 호환
+  if (
+    salesResult.error &&
+    /payment_group_id|customer_name|order_id/i.test(salesResult.error.message)
+  ) {
+    let legacyQuery = supabase
+      .from("sales_logs")
+      .select(selectLegacy)
+      .order("created_at", { ascending: false })
+      .limit(1000);
+    if (dayNumber != null) {
+      legacyQuery = legacyQuery.eq("day_number", dayNumber);
+    }
+    salesResult = await legacyQuery;
+  }
+
+  const productsResult = await supabase
+    .from("products")
+    .select("id, name, brand, company_type, price");
 
   if (salesResult.error) {
     throw new Error(
@@ -62,6 +83,11 @@ export async function fetchSaleLogsWithProducts(
 
   return (salesResult.data ?? []).map((row) => {
     const product = productMap.get(String(row.product_id));
+    const rowExt = row as {
+      payment_group_id?: string | null;
+      order_id?: string | null;
+      customer_name?: string | null;
+    };
     return {
       id: String(row.id),
       productId: String(row.product_id),
@@ -74,8 +100,79 @@ export async function fetchSaleLogsWithProducts(
       brand: product?.brand ?? "미지정",
       companyType: product?.companyType ?? "-",
       unitPrice: product?.unitPrice ?? 0,
+      paymentGroupId: rowExt.payment_group_id
+        ? String(rowExt.payment_group_id)
+        : null,
+      orderId: rowExt.order_id ? String(rowExt.order_id) : null,
+      customerName: rowExt.customer_name
+        ? String(rowExt.customer_name).trim()
+        : null,
     };
   });
+}
+
+function paymentGroupKey(log: SaleLogWithProduct): string {
+  if (log.paymentGroupId) return `pg:${log.paymentGroupId}`;
+  if (log.orderId) return `ord:${log.orderId}`;
+  // 레거시: 동일 초 단위 created_at 묶음
+  const t = new Date(log.createdAt);
+  if (!Number.isNaN(t.getTime())) {
+    return `ts:${t.toISOString().slice(0, 19)}`;
+  }
+  return `id:${log.id}`;
+}
+
+/** 판매 로그를 결제(영수증) 단위로 그룹화 */
+export function groupSalesByPayment(
+  logs: SaleLogWithProduct[]
+): SalePaymentGroup[] {
+  const map = new Map<string, SalePaymentGroup>();
+
+  for (const log of logs) {
+    const key = paymentGroupKey(log);
+    const existing = map.get(key);
+    const item = {
+      saleId: log.id,
+      productId: log.productId,
+      productName: log.productName,
+      brand: log.brand,
+      quantity: log.quantity,
+      totalPrice: log.totalPrice,
+    };
+
+    if (existing) {
+      existing.items.push(item);
+      existing.saleIds.push(log.id);
+      existing.totalPrice += log.totalPrice;
+      if (!existing.customerName && log.customerName) {
+        existing.customerName = log.customerName;
+      }
+    } else {
+      map.set(key, {
+        groupKey: key,
+        paymentGroupId: log.paymentGroupId ?? null,
+        orderId: log.orderId ?? null,
+        customerName: log.customerName?.trim() || "현장",
+        createdAt: log.createdAt,
+        dayNumber: log.dayNumber,
+        items: [item],
+        totalPrice: log.totalPrice,
+        saleIds: [log.id],
+      });
+    }
+  }
+
+  return Array.from(map.values()).sort(
+    (a, b) =>
+      new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+  );
+}
+
+export async function fetchSalePaymentGroups(
+  dayNumber?: EventDay
+): Promise<SalePaymentGroup[]> {
+  const logs = await fetchSaleLogsWithProducts(dayNumber);
+  return groupSalesByPayment(logs);
 }
 
 export function buildSalesReport(

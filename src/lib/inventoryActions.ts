@@ -177,8 +177,20 @@ export async function registerSale(params: {
   soldFrom: StockLocation;
   quantity: number;
   unitPrice: number;
+  paymentGroupId?: string;
+  orderId?: string | null;
+  customerName?: string | null;
 }): Promise<void> {
-  const { productId, dayNumber, soldFrom, quantity, unitPrice } = params;
+  const {
+    productId,
+    dayNumber,
+    soldFrom,
+    quantity,
+    unitPrice,
+    paymentGroupId,
+    orderId,
+    customerName,
+  } = params;
 
   if (!Number.isInteger(quantity) || quantity <= 0) {
     throw new Error("판매 수량은 1 이상의 정수여야 합니다.");
@@ -205,13 +217,20 @@ export async function registerSale(params: {
   });
 
   // 2) 매출 기록
-  const { error: saleError } = await supabase.from("sales_logs").insert({
+  const salePayload: Record<string, unknown> = {
     product_id: productId,
     day_number: dayNumber,
     sold_from: soldFrom,
     quantity,
     total_price: totalPrice,
-  });
+  };
+  if (paymentGroupId) salePayload.payment_group_id = paymentGroupId;
+  if (orderId) salePayload.order_id = orderId;
+  if (customerName != null && customerName !== "") {
+    salePayload.customer_name = customerName;
+  }
+
+  const { error: saleError } = await supabase.from("sales_logs").insert(salePayload);
 
   if (saleError) {
     // 재고는 이미 차감됨 — 복구 시도
@@ -313,7 +332,12 @@ export async function checkoutKioskCart(params: {
     }
   }
 
-  // 검증 통과 후에만 순차 결제 (재고 차감 + 매출)
+  // 검증 통과 후에만 순차 결제 (재고 차감 + 매출) — 동일 payment_group_id로 묶음
+  const paymentGroupId =
+    typeof crypto !== "undefined" && "randomUUID" in crypto
+      ? crypto.randomUUID()
+      : `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+
   for (const [productId, entry] of merged) {
     await registerSale({
       productId,
@@ -321,6 +345,8 @@ export async function checkoutKioskCart(params: {
       soldFrom: "창고",
       quantity: entry.quantity,
       unitPrice: entry.unitPrice,
+      paymentGroupId,
+      customerName: "현장",
     });
   }
 }
@@ -426,6 +452,51 @@ export async function undoSale(saleId: string): Promise<void> {
     .from("sales_logs")
     .delete()
     .eq("id", saleId);
+
+  if (deleteError) {
+    throw new Error(
+      `재고는 복구됐지만 판매 기록 삭제에 실패했습니다: ${deleteError.message}`
+    );
+  }
+}
+
+/** 결제 건(영수증) 전체 취소 — 모든 품목 재고 원복 후 sales_logs 삭제 */
+export async function undoSaleGroup(saleIds: string[]): Promise<void> {
+  const ids = [...new Set(saleIds.filter(Boolean))];
+  if (ids.length === 0) throw new Error("취소할 판매 내역이 없습니다.");
+
+  const { data: sales, error: findError } = await supabase
+    .from("sales_logs")
+    .select("id, product_id, sold_from, quantity")
+    .in("id", ids);
+
+  if (findError) throw new Error(findError.message);
+  if (!sales || sales.length === 0) {
+    throw new Error("취소할 판매 내역을 찾을 수 없습니다.");
+  }
+
+  // 1) 품목별 재고 원복
+  for (const sale of sales) {
+    const productId = String(sale.product_id);
+    const soldFrom = sale.sold_from as StockLocation;
+    const quantity = toQty(sale.quantity);
+    const field = LOCATION_TO_FIELD[soldFrom];
+
+    const current = await fetchInventoryQtys(productId);
+    const next: Record<InventoryQtyField, number> = {
+      backup_qty: current.backup_qty,
+      storage_qty: current.storage_qty,
+      display_qty: current.display_qty,
+    };
+    next[field] += quantity;
+    await updateInventoryQtys(productId, next);
+  }
+
+  // 2) 판매 기록 일괄 삭제
+  const { error: deleteError } = await supabase
+    .from("sales_logs")
+    .delete()
+    .in("id", ids);
 
   if (deleteError) {
     throw new Error(

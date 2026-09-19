@@ -790,7 +790,17 @@ export default function KioskBoard() {
     try {
       if (activeSmartOrderId) {
         const paidOrderId = activeSmartOrderId;
-        await completePosPayment(paidOrderId, eventDay);
+        // 수동 추가 품목 포함 — 화면 최종 장바구니 기준으로 결제
+        await completePosPayment(
+          paidOrderId,
+          eventDay,
+          cart.map((item) => ({
+            productId: item.id,
+            quantity: item.qty,
+            unitPrice: item.price,
+            productName: item.name,
+          }))
+        );
         const label = activeSmartLabel ?? "스마트 오더";
         // 결제 후 장바구니·스마트 오더 상태 초기화 → 다음 대기열 준비
         setCart([]);

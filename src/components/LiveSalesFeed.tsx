@@ -2,10 +2,10 @@
 
 import { useEffect, useState } from "react";
 import { useEventDay } from "@/hooks/useEventDay";
-import { undoSale } from "@/lib/inventoryActions";
-import { fetchSaleLogsWithProducts } from "@/lib/fetchSalesReport";
+import { undoSaleGroup } from "@/lib/inventoryActions";
+import { fetchSalePaymentGroups } from "@/lib/fetchSalesReport";
 import { supabase } from "@/lib/supabase";
-import type { SaleLogWithProduct } from "@/types/salesReport";
+import type { SalePaymentGroup } from "@/types/salesReport";
 
 function formatTime(value: string): string {
   if (!value) return "--:--";
@@ -18,12 +18,22 @@ function formatTime(value: string): string {
   }).format(date);
 }
 
+function formatCurrency(value: number): string {
+  return `${Number(value || 0).toLocaleString("ko-KR")}원`;
+}
+
+function formatItemsLine(group: SalePaymentGroup): string {
+  return group.items
+    .map((item) => `${item.productName} x ${item.quantity}`)
+    .join(", ");
+}
+
 export default function LiveSalesFeed() {
   const { eventDay } = useEventDay();
-  const [sales, setSales] = useState<SaleLogWithProduct[]>([]);
+  const [groups, setGroups] = useState<SalePaymentGroup[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [cancellingId, setCancellingId] = useState<string | null>(null);
+  const [cancellingKey, setCancellingKey] = useState<string | null>(null);
 
   async function load(options?: { silent?: boolean }) {
     if (!options?.silent) {
@@ -32,8 +42,8 @@ export default function LiveSalesFeed() {
     }
 
     try {
-      const logs = await fetchSaleLogsWithProducts(eventDay);
-      setSales(logs);
+      const data = await fetchSalePaymentGroups(eventDay);
+      setGroups(data);
     } catch (err) {
       const message =
         err instanceof Error
@@ -75,29 +85,31 @@ export default function LiveSalesFeed() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [eventDay]);
 
-  async function handleCancelSale(sale: SaleLogWithProduct) {
-    if (cancellingId) return;
+  async function handleCancelGroup(group: SalePaymentGroup) {
+    if (cancellingKey) return;
 
+    const label = group.customerName?.trim() || "손님";
     const ok = window.confirm(
-      "정말 이 결제 내역을 취소하시겠습니까?\n(취소 시 판매 기록에서 삭제되며 재고가 다시 복구됩니다.)"
+      label === "현장"
+        ? "이 현장 결제 건 전체를 취소하시겠습니까?\n(취소 시 판매 기록에서 삭제되며 재고가 다시 복구됩니다.)"
+        : `${label}번 손님의 주문 전체를 취소하시겠습니까?\n(취소 시 판매 기록에서 삭제되며 재고가 다시 복구됩니다.)`
     );
     if (!ok) return;
 
-    setCancellingId(sale.id);
-    // 즉시 목록에서 제거
-    setSales((prev) => prev.filter((row) => row.id !== sale.id));
+    setCancellingKey(group.groupKey);
+    setGroups((prev) => prev.filter((row) => row.groupKey !== group.groupKey));
 
     try {
-      await undoSale(sale.id);
+      await undoSaleGroup(group.saleIds);
       window.alert("취소 및 재고 복구가 완료되었습니다.");
     } catch (err) {
-      console.error("[LiveSalesFeed] undoSale 실패", err);
+      console.error("[LiveSalesFeed] undoSaleGroup 실패", err);
       const message =
         err instanceof Error ? err.message : "결제 취소에 실패했습니다.";
       window.alert(message);
       void load({ silent: true });
     } finally {
-      setCancellingId(null);
+      setCancellingKey(null);
     }
   }
 
@@ -108,7 +120,7 @@ export default function LiveSalesFeed() {
           실시간 판매 기록
         </h1>
         <p className="mt-1 text-sm text-slate-500">
-          {eventDay}일차 판매 현황 · 최신순
+          {eventDay}일차 · 결제 건(영수증) 단위 · 최신순
         </p>
       </header>
 
@@ -122,15 +134,15 @@ export default function LiveSalesFeed() {
       )}
 
       {loading ? (
-        <div className="space-y-2">
-          {Array.from({ length: 8 }).map((_, index) => (
+        <div className="space-y-3">
+          {Array.from({ length: 5 }).map((_, index) => (
             <div
               key={index}
-              className="h-14 animate-pulse rounded-xl bg-slate-200/70"
+              className="h-28 animate-pulse rounded-2xl bg-slate-200/70"
             />
           ))}
         </div>
-      ) : sales.length === 0 ? (
+      ) : groups.length === 0 ? (
         <div className="rounded-2xl border border-dashed border-slate-200 bg-white px-6 py-16 text-center">
           <p className="text-lg font-semibold text-slate-800">
             아직 판매 기록이 없습니다
@@ -140,38 +152,37 @@ export default function LiveSalesFeed() {
           </p>
         </div>
       ) : (
-        <ul className="space-y-2">
-          {sales.map((sale) => {
-            const isCancelling = cancellingId === sale.id;
+        <ul className="space-y-3">
+          {groups.map((group) => {
+            const isCancelling = cancellingKey === group.groupKey;
             return (
               <li
-                key={sale.id}
-                className="flex items-center gap-3 rounded-xl border border-slate-200 bg-white px-4 py-3 shadow-sm"
+                key={group.groupKey}
+                className="rounded-2xl border border-slate-200 bg-white px-4 py-3.5 shadow-sm sm:px-5"
               >
-                <time className="w-14 shrink-0 text-sm font-bold tabular-nums text-sky-700">
-                  {formatTime(sale.createdAt)}
-                </time>
-                <div className="min-w-0 flex-1">
-                  <p className="truncate text-xs font-medium text-slate-400">
-                    {sale.brand}
-                  </p>
-                  <p className="truncate text-sm font-semibold text-slate-900">
-                    {sale.productName}
-                  </p>
-                </div>
-                <div className="flex shrink-0 items-center gap-2.5">
-                  <p className="text-base font-bold tabular-nums text-slate-900">
-                    {sale.quantity}
-                    <span className="ml-0.5 text-xs font-semibold text-slate-500">
-                      개
-                    </span>
-                  </p>
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+                      <time className="text-sm font-bold tabular-nums text-sky-700">
+                        {formatTime(group.createdAt)}
+                      </time>
+                      <span className="text-sm font-bold text-slate-900">
+                        손님 번호: {group.customerName}
+                      </span>
+                    </div>
+                    <p className="mt-2 text-sm leading-relaxed text-slate-700">
+                      {formatItemsLine(group)}
+                    </p>
+                    <p className="mt-2 text-base font-extrabold tabular-nums text-emerald-700">
+                      총 {formatCurrency(group.totalPrice)}
+                    </p>
+                  </div>
                   <button
                     type="button"
-                    disabled={cancellingId !== null}
-                    onClick={() => void handleCancelSale(sale)}
-                    className="rounded-md border border-gray-200 bg-gray-50 px-3 py-1.5 text-xs font-medium text-gray-400 transition-all duration-200 hover:border-red-200 hover:bg-red-50 hover:text-red-600 disabled:opacity-40"
-                    title="결제 취소 · 재고 원복"
+                    disabled={cancellingKey !== null}
+                    onClick={() => void handleCancelGroup(group)}
+                    className="shrink-0 rounded-md border border-gray-200 bg-gray-50 px-3 py-1.5 text-xs font-medium text-gray-400 transition-all duration-200 hover:border-red-200 hover:bg-red-50 hover:text-red-600 disabled:opacity-40"
+                    title="결제 건 전체 취소 · 재고 원복"
                   >
                     {isCancelling ? "취소 중…" : "결제 취소"}
                   </button>
