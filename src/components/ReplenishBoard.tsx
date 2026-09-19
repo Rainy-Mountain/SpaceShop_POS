@@ -97,9 +97,17 @@ export default function ReplenishBoard() {
 
   const urgent = useMemo(
     () =>
-      products.filter(
-        (row) => row.backupQty > 0 && row.storageQty <= 2
-      ),
+      products
+        .filter((row) => row.backupQty > 0 && row.storageQty <= 2)
+        .sort((a, b) => {
+          // 샵 재고 1개 품목을 최상단 우선
+          if (a.storageQty === 1 && b.storageQty !== 1) return -1;
+          if (b.storageQty === 1 && a.storageQty !== 1) return 1;
+          if (a.storageQty !== b.storageQty) {
+            return a.storageQty - b.storageQty;
+          }
+          return a.name.localeCompare(b.name, "ko");
+        }),
     [products]
   );
 

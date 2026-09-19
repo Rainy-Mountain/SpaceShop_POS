@@ -28,8 +28,8 @@ export default function StockMoveModal({
   onClose,
   onSuccess,
 }: StockMoveModalProps) {
-  const [from, setFrom] = useState<"창고" | "차량">("창고");
-  const [to, setTo] = useState<"창고" | "차량">("차량");
+  const [from, setFrom] = useState<"창고" | "차량">("차량");
+  const [to, setTo] = useState<"창고" | "차량">("창고");
   const [quantity, setQuantity] = useState("1");
   const [submitting, setSubmitting] = useState(false);
 
@@ -70,8 +70,8 @@ export default function StockMoveModal({
         quantity: qty,
       });
       await onSuccess();
-      setFrom("창고");
-      setTo("차량");
+      setFrom("차량");
+      setTo("창고");
       setQuantity("1");
       onClose();
     } catch (error) {

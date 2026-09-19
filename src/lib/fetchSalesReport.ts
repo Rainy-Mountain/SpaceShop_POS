@@ -24,7 +24,8 @@ export async function fetchSaleLogsWithProducts(
     .select(
       "id, product_id, day_number, sold_from, quantity, total_price, created_at"
     )
-    .order("created_at", { ascending: false });
+    .order("created_at", { ascending: false })
+    .limit(1000);
 
   if (dayNumber != null) {
     salesQuery = salesQuery.eq("day_number", dayNumber);

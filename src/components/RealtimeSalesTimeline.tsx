@@ -7,8 +7,8 @@ import type { EventDay } from "@/types/dashboard";
 import type { SaleLogWithProduct } from "@/types/salesReport";
 
 const EVENT_DAYS: EventDay[] = [1, 2, 3];
-/** 일자별 렌더 상한 (스크롤로 탐색) */
-const PER_DAY_CAP = 100;
+/** 일자별 렌더 상한 (스크롤로 탐색, DB limit 1000과 맞춤) */
+const PER_DAY_CAP = 1000;
 
 function formatTime(value: string): string {
   if (!value) return "--:--";
