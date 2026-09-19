@@ -30,14 +30,15 @@ create table if not exists sales_logs (
   total_price numeric not null default 0,
   payment_group_id uuid,
   order_id uuid,
-  customer_name text,
+  queue_id uuid,
   created_at timestamptz not null default now()
 );
 
 -- 결제 건 그룹화 컬럼 (기존 DB: add_sales_payment_group.sql 실행)
+-- 손님 번호·순번은 orders / queues 조인으로 표시 (sales_logs에 customer_name 없음)
 -- alter table sales_logs add column if not exists payment_group_id uuid;
 -- alter table sales_logs add column if not exists order_id uuid;
--- alter table sales_logs add column if not exists customer_name text;
+-- alter table sales_logs add column if not exists queue_id uuid;
 
 create table if not exists movement_logs (
   id uuid primary key default gen_random_uuid(),

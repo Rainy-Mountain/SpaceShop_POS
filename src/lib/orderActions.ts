@@ -631,6 +631,7 @@ export async function completePosPayment(
       queue_id,
       status,
       customer_name,
+      queue_number,
       queues ( customer_name, queue_number ),
       order_items (
         product_id,
@@ -643,6 +644,7 @@ export async function completePosPayment(
       queue_id,
       status,
       customer_name,
+      queue_number,
       order_items (
         product_id,
         quantity,
@@ -678,7 +680,7 @@ export async function completePosPayment(
     throw new Error("이미 처리된 주문입니다.");
   }
 
-  // 손님 4자리 번호 — orders ↔ queues 연결 보존 (결제·매출 기록에 동일 값 사용)
+  // 손님 4자리·순번 — orders ↔ queues 연결 보존
   const queueRel = normalizeQueueRelation(
     (order as { queues?: unknown }).queues
   );
@@ -686,19 +688,28 @@ export async function completePosPayment(
     String(order.customer_name ?? "").trim() ||
     String(queueRel?.customer_name ?? "").trim() ||
     "";
+  let queueNumber =
+    Number((order as { queue_number?: number }).queue_number) ||
+    Number(queueRel?.queue_number) ||
+    0;
   const queueId = String(order.queue_id ?? "").trim();
   if (!queueId) {
     throw new Error("주문에 연결된 대기열(queue_id)이 없습니다.");
   }
 
-  // 조인 실패·orders.customer_name 비어 있을 때 queues 직접 조회
-  if (!guestLabel) {
+  // 조인 실패·빈 값일 때 queues 직접 조회
+  if (!guestLabel || !queueNumber) {
     const { data: queueRow } = await supabase
       .from("queues")
-      .select("customer_name")
+      .select("customer_name, queue_number")
       .eq("id", queueId)
       .maybeSingle();
-    guestLabel = String(queueRow?.customer_name ?? "").trim();
+    if (!guestLabel) {
+      guestLabel = String(queueRow?.customer_name ?? "").trim();
+    }
+    if (!queueNumber) {
+      queueNumber = Number(queueRow?.queue_number) || 0;
+    }
   }
 
   // 최종 장바구니(수동 추가 포함) 우선 — 없으면 DB order_items
@@ -907,15 +918,14 @@ export async function completePosPayment(
     }
   }
 
-  // ── 3) 총액·손님번호 보존 후 status=paid (동기화·차감이 끝난 뒤에만) ──
+  // ── 3) queue_id·손님정보 보존 후 status=paid ──
   const paidPayload: Record<string, unknown> = {
     status: "paid",
     total_price: orderTotal,
     queue_id: queueId,
   };
-  if (guestLabel) {
-    paidPayload.customer_name = guestLabel;
-  }
+  if (guestLabel) paidPayload.customer_name = guestLabel;
+  if (queueNumber > 0) paidPayload.queue_number = queueNumber;
 
   let orderResult = await supabase
     .from("orders")
@@ -933,6 +943,7 @@ export async function completePosPayment(
       queue_id: queueId,
     };
     if (guestLabel) fallbackPayload.customer_name = guestLabel;
+    if (queueNumber > 0) fallbackPayload.queue_number = queueNumber;
     orderResult = await supabase
       .from("orders")
       .update(fallbackPayload)
@@ -954,54 +965,68 @@ export async function completePosPayment(
     throw queueResult.error;
   }
 
-  // ── 4) 매출 기록 INSERT (검증·품목동기화·차감·상태 변경이 모두 끝난 뒤에만) ──
+  // ── 4) 매출 기록 — order_id·queue_id 를 최대한 보존 (손님 표기용 조인 키)
   const paymentGroupId =
     typeof crypto !== "undefined" && "randomUUID" in crypto
       ? crypto.randomUUID()
       : `${Date.now()}-${Math.random().toString(16).slice(2)}`;
 
-  const saleRows = prepared.map((item) => ({
+  const coreSaleRows = prepared.map((item) => ({
     product_id: item.productId,
     day_number: day,
     sold_from: "창고" as const,
     quantity: item.quantity,
     total_price: item.unitPrice * item.quantity,
-    payment_group_id: paymentGroupId,
-    order_id: orderId,
-    customer_name: guestLabel || null,
   }));
 
-  const { error: salesError } = await supabase
-    .from("sales_logs")
-    .insert(saleRows);
+  type SaleInsertAttempt = Record<string, unknown>[];
+  const insertAttempts: SaleInsertAttempt[] = [
+    // 1) 전체 (payment_group + order + queue)
+    coreSaleRows.map((row) => ({
+      ...row,
+      payment_group_id: paymentGroupId,
+      order_id: orderId,
+      queue_id: queueId,
+    })),
+    // 2) order_id + queue_id (payment_group 없을 때)
+    coreSaleRows.map((row) => ({
+      ...row,
+      order_id: orderId,
+      queue_id: queueId,
+    })),
+    // 3) order_id 만 — 대기열 손님 연결의 최소 조건
+    coreSaleRows.map((row) => ({
+      ...row,
+      order_id: orderId,
+    })),
+    // 4) 핵심 컬럼만 (최후 — 손님 표기 불가, 재고·매출은 유지)
+    coreSaleRows,
+  ];
+
+  let salesError: { message: string } | null = null;
+  for (const rows of insertAttempts) {
+    const result = await supabase.from("sales_logs").insert(rows);
+    if (!result.error) {
+      salesError = null;
+      break;
+    }
+    salesError = result.error;
+    // 스키마/FK 관련만 다음 시도, 그 외는 즉시 중단
+    if (
+      !/payment_group_id|order_id|queue_id|customer_name|schema cache|could not find|foreign key|relationship/i.test(
+        result.error.message
+      )
+    ) {
+      break;
+    }
+  }
 
   if (salesError) {
-    // 컬럼 미마이그레이션 시 레거시 insert 폴백
-    if (/payment_group_id|customer_name|order_id/i.test(salesError.message)) {
-      const legacyRows = prepared.map((item) => ({
-        product_id: item.productId,
-        day_number: day,
-        sold_from: "창고" as const,
-        quantity: item.quantity,
-        total_price: item.unitPrice * item.quantity,
-      }));
-      const { error: legacyError } = await supabase
-        .from("sales_logs")
-        .insert(legacyRows);
-      if (legacyError) {
-        console.error("[completePosPayment] sales_logs insert 실패", legacyError);
-        throw new Error(
-          legacyError.message ||
-            "매출 기록 저장에 실패했습니다. 재고·주문 상태는 이미 반영됐을 수 있습니다."
-        );
-      }
-    } else {
-      console.error("[completePosPayment] sales_logs insert 실패", salesError);
-      throw new Error(
-        salesError.message ||
-          "매출 기록 저장에 실패했습니다. 재고·주문 상태는 이미 반영됐을 수 있습니다."
-      );
-    }
+    console.error("[completePosPayment] sales_logs insert 실패", salesError);
+    throw new Error(
+      salesError.message ||
+        "매출 기록 저장에 실패했습니다. 재고·주문 상태는 이미 반영됐을 수 있습니다."
+    );
   }
 }
 

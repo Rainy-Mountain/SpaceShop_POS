@@ -23,40 +23,174 @@ function normalizeJoinedRelation<T extends object>(value: unknown): T | null {
   return value as T;
 }
 
-/** sales_logs / orders / queues 에서 손님 4자리 번호 추출 */
-function resolveGuestCustomerName(options: {
-  salesCustomerName?: string | null;
+function isPlaceholderGuest(value: string): boolean {
+  return (
+    !value ||
+    value === "현장" ||
+    value === "손님" ||
+    value === "현장 손님" ||
+    value === "워크인"
+  );
+}
+
+type GuestInfo = {
+  customerName: string | null;
+  queueNumber: number | null;
+  queueId: string | null;
+};
+
+/** orders / queues 에서 폰 뒷자리·순번 추출 */
+function resolveGuestInfo(options: {
   orderCustomerName?: string | null;
+  orderQueueNumber?: number | null;
+  orderQueueId?: string | null;
   queueCustomerName?: string | null;
-}): string | null {
-  const candidates = [
-    options.salesCustomerName,
-    options.orderCustomerName,
-    options.queueCustomerName,
-  ];
-  for (const raw of candidates) {
-    const value = String(raw ?? "").trim();
-    if (!value) continue;
-    // 워크인 표기·플레이스홀더는 조인 보강 대상으로 취급
-    if (value === "현장" || value === "손님" || value === "현장 손님") continue;
-    return value;
+  queueNumber?: number | null;
+  queueId?: string | null;
+}): GuestInfo {
+  const phoneRaw =
+    String(options.orderCustomerName ?? "").trim() ||
+    String(options.queueCustomerName ?? "").trim();
+  const customerName = isPlaceholderGuest(phoneRaw) ? null : phoneRaw;
+
+  const queueNumber =
+    (Number(options.orderQueueNumber) || 0) > 0
+      ? Number(options.orderQueueNumber)
+      : (Number(options.queueNumber) || 0) > 0
+        ? Number(options.queueNumber)
+        : null;
+
+  const queueId =
+    String(options.orderQueueId ?? "").trim() ||
+    String(options.queueId ?? "").trim() ||
+    null;
+
+  return { customerName, queueNumber, queueId };
+}
+
+async function fetchGuestInfoByOrderIds(
+  orderIds: string[]
+): Promise<Map<string, GuestInfo>> {
+  const map = new Map<string, GuestInfo>();
+  if (orderIds.length === 0) return map;
+
+  const { data, error } = await supabase
+    .from("orders")
+    .select(
+      "id, customer_name, queue_number, queue_id, queues ( customer_name, queue_number )"
+    )
+    .in("id", orderIds);
+
+  if (error) {
+    const plain = await supabase
+      .from("orders")
+      .select("id, customer_name, queue_number, queue_id")
+      .in("id", orderIds);
+
+    for (const row of plain.data ?? []) {
+      map.set(
+        String(row.id),
+        resolveGuestInfo({
+          orderCustomerName: row.customer_name as string | null,
+          orderQueueNumber: row.queue_number as number | null,
+          orderQueueId: row.queue_id as string | null,
+        })
+      );
+    }
+
+    const linkedQueueIds = [
+      ...new Set(
+        [...map.values()]
+          .map((g) => g.queueId)
+          .filter((id): id is string => Boolean(id))
+      ),
+    ];
+    if (linkedQueueIds.length > 0) {
+      const { data: queues } = await supabase
+        .from("queues")
+        .select("id, customer_name, queue_number")
+        .in("id", linkedQueueIds);
+      const queueById = new Map(
+        (queues ?? []).map((q) => [String(q.id), q])
+      );
+      for (const [orderId, guest] of map) {
+        if (!guest.queueId) continue;
+        const q = queueById.get(guest.queueId);
+        if (!q) continue;
+        map.set(
+          orderId,
+          resolveGuestInfo({
+            orderCustomerName: guest.customerName,
+            orderQueueNumber: guest.queueNumber,
+            orderQueueId: guest.queueId,
+            queueCustomerName: q.customer_name as string | null,
+            queueNumber: q.queue_number as number | null,
+            queueId: guest.queueId,
+          })
+        );
+      }
+    }
+    return map;
   }
-  return null;
+
+  for (const row of data ?? []) {
+    const queue = normalizeJoinedRelation<{
+      customer_name?: string | null;
+      queue_number?: number | null;
+    }>(row.queues);
+    map.set(
+      String(row.id),
+      resolveGuestInfo({
+        orderCustomerName: row.customer_name as string | null,
+        orderQueueNumber: row.queue_number as number | null,
+        orderQueueId: row.queue_id as string | null,
+        queueCustomerName: queue?.customer_name,
+        queueNumber: queue?.queue_number,
+        queueId: row.queue_id as string | null,
+      })
+    );
+  }
+  return map;
+}
+
+async function fetchGuestInfoByQueueIds(
+  queueIds: string[]
+): Promise<Map<string, GuestInfo>> {
+  const map = new Map<string, GuestInfo>();
+  if (queueIds.length === 0) return map;
+
+  const { data } = await supabase
+    .from("queues")
+    .select("id, customer_name, queue_number")
+    .in("id", queueIds);
+
+  for (const row of data ?? []) {
+    map.set(
+      String(row.id),
+      resolveGuestInfo({
+        queueCustomerName: row.customer_name as string | null,
+        queueNumber: row.queue_number as number | null,
+        queueId: String(row.id),
+      })
+    );
+  }
+  return map;
 }
 
 export async function fetchSaleLogsWithProducts(
   dayNumber?: EventDay
 ): Promise<SaleLogWithProduct[]> {
-  const selectWithJoin =
-    "id, product_id, day_number, sold_from, quantity, total_price, created_at, payment_group_id, order_id, customer_name, orders ( customer_name, queue_id, queues ( customer_name ) )";
-  const selectWithGroup =
-    "id, product_id, day_number, sold_from, quantity, total_price, created_at, payment_group_id, order_id, customer_name";
+  // sales_logs.customer_name 직접 참조 금지 — order_id / queue_id 로 손님 정보 조회
+  const selectFull =
+    "id, product_id, day_number, sold_from, quantity, total_price, created_at, payment_group_id, order_id, queue_id";
+  const selectWithOrder =
+    "id, product_id, day_number, sold_from, quantity, total_price, created_at, payment_group_id, order_id";
   const selectLegacy =
     "id, product_id, day_number, sold_from, quantity, total_price, created_at";
 
   let salesQuery = supabase
     .from("sales_logs")
-    .select(selectWithJoin)
+    .select(selectFull)
     .order("created_at", { ascending: false })
     .limit(1000);
 
@@ -65,40 +199,33 @@ export async function fetchSaleLogsWithProducts(
   }
 
   let salesResult = await salesQuery;
-  let usedJoin = !salesResult.error;
 
-  // FK/조인 미설정 시 기본 컬럼만
   if (
     salesResult.error &&
-    /orders|queues|relationship|foreign key/i.test(salesResult.error.message)
+    /queue_id|schema cache|could not find/i.test(salesResult.error.message)
   ) {
-    let fallbackQuery = supabase
+    let q = supabase
       .from("sales_logs")
-      .select(selectWithGroup)
+      .select(selectWithOrder)
       .order("created_at", { ascending: false })
       .limit(1000);
-    if (dayNumber != null) {
-      fallbackQuery = fallbackQuery.eq("day_number", dayNumber);
-    }
-    salesResult = await fallbackQuery;
-    usedJoin = false;
+    if (dayNumber != null) q = q.eq("day_number", dayNumber);
+    salesResult = await q;
   }
 
-  // 마이그레이션 전 DB 호환
   if (
     salesResult.error &&
-    /payment_group_id|customer_name|order_id/i.test(salesResult.error.message)
+    /payment_group_id|order_id|schema cache|could not find/i.test(
+      salesResult.error.message
+    )
   ) {
-    let legacyQuery = supabase
+    let q = supabase
       .from("sales_logs")
       .select(selectLegacy)
       .order("created_at", { ascending: false })
       .limit(1000);
-    if (dayNumber != null) {
-      legacyQuery = legacyQuery.eq("day_number", dayNumber);
-    }
-    salesResult = await legacyQuery;
-    usedJoin = false;
+    if (dayNumber != null) q = q.eq("day_number", dayNumber);
+    salesResult = await q;
   }
 
   const productsResult = await supabase
@@ -117,36 +244,34 @@ export async function fetchSaleLogsWithProducts(
     );
   }
 
-  // 조인 실패 시 order_id로 orders→queues 일괄 보강
-  const orderGuestById = new Map<string, string>();
-  if (!usedJoin) {
-    const orderIds = [
-      ...new Set(
-        (salesResult.data ?? [])
-          .map((row) => {
-            const ext = row as { order_id?: string | null };
-            return ext.order_id ? String(ext.order_id) : "";
-          })
-          .filter(Boolean)
-      ),
-    ];
-    if (orderIds.length > 0) {
-      const { data: orderRows } = await supabase
-        .from("orders")
-        .select("id, customer_name, queues ( customer_name )")
-        .in("id", orderIds);
-      for (const row of orderRows ?? []) {
-        const queue = normalizeJoinedRelation<{ customer_name?: string | null }>(
-          row.queues
-        );
-        const guest = resolveGuestCustomerName({
-          orderCustomerName: row.customer_name as string | null,
-          queueCustomerName: queue?.customer_name,
-        });
-        if (guest) orderGuestById.set(String(row.id), guest);
-      }
-    }
-  }
+  const rows = salesResult.data ?? [];
+
+  const orderIds = [
+    ...new Set(
+      rows
+        .map((row) => {
+          const ext = row as { order_id?: string | null };
+          return ext.order_id ? String(ext.order_id) : "";
+        })
+        .filter(Boolean)
+    ),
+  ];
+  const queueIds = [
+    ...new Set(
+      rows
+        .map((row) => {
+          const ext = row as { queue_id?: string | null };
+          return ext.queue_id ? String(ext.queue_id) : "";
+        })
+        .filter(Boolean)
+    ),
+  ];
+
+  // 항상 별도 조회로 보강 (임베드 FK 의존 X)
+  const [guestByOrderId, guestByQueueId] = await Promise.all([
+    fetchGuestInfoByOrderIds(orderIds),
+    fetchGuestInfoByQueueIds(queueIds),
+  ]);
 
   const productMap = new Map(
     (productsResult.data ?? []).map((product) => [
@@ -160,31 +285,30 @@ export async function fetchSaleLogsWithProducts(
     ])
   );
 
-  return (salesResult.data ?? []).map((row) => {
+  return rows.map((row) => {
     const product = productMap.get(String(row.product_id));
     const rowExt = row as {
       payment_group_id?: string | null;
       order_id?: string | null;
-      customer_name?: string | null;
-      orders?: unknown;
+      queue_id?: string | null;
     };
 
-    const orderRel = normalizeJoinedRelation<{
-      customer_name?: string | null;
-      queues?: unknown;
-    }>(rowExt.orders);
-    const queueRel = normalizeJoinedRelation<{
-      customer_name?: string | null;
-    }>(orderRel?.queues);
-
     const orderId = rowExt.order_id ? String(rowExt.order_id) : null;
-    const guestName =
-      resolveGuestCustomerName({
-        salesCustomerName: rowExt.customer_name,
-        orderCustomerName: orderRel?.customer_name,
-        queueCustomerName: queueRel?.customer_name,
-      }) ||
-      (orderId ? orderGuestById.get(orderId) ?? null : null);
+    const rawQueueId = rowExt.queue_id ? String(rowExt.queue_id) : null;
+
+    const fromOrder = orderId ? guestByOrderId.get(orderId) : undefined;
+    const fromQueue = rawQueueId
+      ? guestByQueueId.get(rawQueueId)
+      : undefined;
+
+    const guest = resolveGuestInfo({
+      orderCustomerName: fromOrder?.customerName,
+      orderQueueNumber: fromOrder?.queueNumber,
+      orderQueueId: fromOrder?.queueId ?? rawQueueId,
+      queueCustomerName: fromQueue?.customerName,
+      queueNumber: fromQueue?.queueNumber,
+      queueId: fromQueue?.queueId ?? fromOrder?.queueId ?? rawQueueId,
+    });
 
     return {
       id: String(row.id),
@@ -202,7 +326,9 @@ export async function fetchSaleLogsWithProducts(
         ? String(rowExt.payment_group_id)
         : null,
       orderId,
-      customerName: guestName,
+      queueId: guest.queueId,
+      customerName: guest.customerName,
+      queueNumber: guest.queueNumber,
     };
   });
 }
@@ -210,7 +336,7 @@ export async function fetchSaleLogsWithProducts(
 function paymentGroupKey(log: SaleLogWithProduct): string {
   if (log.paymentGroupId) return `pg:${log.paymentGroupId}`;
   if (log.orderId) return `ord:${log.orderId}`;
-  // 레거시: 동일 초 단위 created_at 묶음
+  if (log.queueId) return `q:${log.queueId}:${log.createdAt.slice(0, 19)}`;
   const t = new Date(log.createdAt);
   if (!Number.isNaN(t.getTime())) {
     return `ts:${t.toISOString().slice(0, 19)}`;
@@ -240,21 +366,26 @@ export function groupSalesByPayment(
       existing.items.push(item);
       existing.saleIds.push(log.id);
       existing.totalPrice += log.totalPrice;
-      if (
-        (!existing.customerName ||
-          existing.customerName === "현장" ||
-          existing.customerName === "현장 손님") &&
-        log.customerName
-      ) {
+      if (!existing.customerName && log.customerName) {
         existing.customerName = log.customerName;
+      }
+      if (existing.queueNumber == null && log.queueNumber != null) {
+        existing.queueNumber = log.queueNumber;
+      }
+      if (!existing.queueId && log.queueId) {
+        existing.queueId = log.queueId;
+      }
+      if (!existing.orderId && log.orderId) {
+        existing.orderId = log.orderId;
       }
     } else {
       map.set(key, {
         groupKey: key,
         paymentGroupId: log.paymentGroupId ?? null,
         orderId: log.orderId ?? null,
-        // 실제 4자리만 넣고, 없으면 빈 값 — UI에서 '현장 손님' 처리
+        queueId: log.queueId ?? null,
         customerName: log.customerName?.trim() || "",
+        queueNumber: log.queueNumber ?? null,
         createdAt: log.createdAt,
         dayNumber: log.dayNumber,
         items: [item],

@@ -14,7 +14,11 @@ export interface SaleLogWithProduct {
   unitPrice: number;
   paymentGroupId?: string | null;
   orderId?: string | null;
+  queueId?: string | null;
+  /** 폰 뒷자리 4자리 */
   customerName?: string | null;
+  /** 대기 순번 */
+  queueNumber?: number | null;
 }
 
 export interface SalePaymentGroupItem {
@@ -31,7 +35,11 @@ export interface SalePaymentGroup {
   groupKey: string;
   paymentGroupId: string | null;
   orderId: string | null;
+  queueId: string | null;
+  /** 폰 뒷자리 4자리 (없으면 빈 문자열) */
   customerName: string;
+  /** 대기 순번 (없으면 null) */
+  queueNumber: number | null;
   createdAt: string;
   dayNumber: number;
   items: SalePaymentGroupItem[];

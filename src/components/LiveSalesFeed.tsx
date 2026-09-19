@@ -22,23 +22,40 @@ function formatCurrency(value: number): string {
   return `${Number(value || 0).toLocaleString("ko-KR")}원`;
 }
 
-/** 4자리 번호 있으면 N번 손님, 없으면(워크인) 현장 손님 */
-function formatGuestLabel(customerName: string | null | undefined): string {
-  const raw = String(customerName ?? "").trim();
-  if (
-    !raw ||
-    raw === "현장" ||
-    raw === "손님" ||
-    raw === "현장 손님"
-  ) {
-    return "현장 손님";
+/** 순번+폰뒷자리 또는 워크인 */
+function formatGuestLabel(group: {
+  customerName?: string | null;
+  queueNumber?: number | null;
+}): string {
+  const phone = String(group.customerName ?? "").trim();
+  const queueNumber =
+    typeof group.queueNumber === "number" && group.queueNumber > 0
+      ? group.queueNumber
+      : null;
+  const hasPhone =
+    Boolean(phone) &&
+    phone !== "현장" &&
+    phone !== "손님" &&
+    phone !== "현장 손님" &&
+    phone !== "워크인";
+
+  if (!hasPhone && queueNumber == null) {
+    return "워크인";
   }
-  if (/번\s*손님$/.test(raw)) return raw;
-  return `${raw}번 손님`;
+
+  const seq =
+    queueNumber != null
+      ? String(queueNumber).padStart(2, "0")
+      : "--";
+  const phoneLabel = hasPhone ? phone : "----";
+  return `[순번: ${seq}번] ${phoneLabel}님`;
 }
 
-function isWalkInGuest(customerName: string | null | undefined): boolean {
-  return formatGuestLabel(customerName) === "현장 손님";
+function isWalkInGuest(group: {
+  customerName?: string | null;
+  queueNumber?: number | null;
+}): boolean {
+  return formatGuestLabel(group) === "워크인";
 }
 
 export default function LiveSalesFeed() {
@@ -107,10 +124,10 @@ export default function LiveSalesFeed() {
   async function handleCancelGroup(group: SalePaymentGroup) {
     if (cancellingGroupKey || cancellingSaleId) return;
 
-    const label = formatGuestLabel(group.customerName);
+    const label = formatGuestLabel(group);
     const ok = window.confirm(
-      isWalkInGuest(group.customerName)
-        ? "이 현장 결제 건 전체를 취소하시겠습니까?\n(취소 시 판매 기록에서 삭제되며 재고가 다시 복구됩니다.)"
+      isWalkInGuest(group)
+        ? "이 워크인 결제 건 전체를 취소하시겠습니까?\n(취소 시 판매 기록에서 삭제되며 재고가 다시 복구됩니다.)"
         : `${label}의 주문 전체를 취소하시겠습니까?\n(취소 시 판매 기록에서 삭제되며 재고가 다시 복구됩니다.)`
     );
     if (!ok) return;
@@ -230,8 +247,8 @@ export default function LiveSalesFeed() {
                     <time className="text-sm font-bold tabular-nums text-sky-700">
                       {formatTime(group.createdAt)}
                     </time>
-                    <span className="text-sm font-bold text-slate-900">
-                      {formatGuestLabel(group.customerName)}
+                    <span className="text-sm font-semibold text-gray-800">
+                      {formatGuestLabel(group)}
                     </span>
                   </div>
                   <button

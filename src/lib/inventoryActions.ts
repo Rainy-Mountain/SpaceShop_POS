@@ -179,7 +179,6 @@ export async function registerSale(params: {
   unitPrice: number;
   paymentGroupId?: string;
   orderId?: string | null;
-  customerName?: string | null;
 }): Promise<void> {
   const {
     productId,
@@ -189,7 +188,6 @@ export async function registerSale(params: {
     unitPrice,
     paymentGroupId,
     orderId,
-    customerName,
   } = params;
 
   if (!Number.isInteger(quantity) || quantity <= 0) {
@@ -216,21 +214,31 @@ export async function registerSale(params: {
     [field]: nextQty,
   });
 
-  // 2) 매출 기록
-  const salePayload: Record<string, unknown> = {
+  // 2) 매출 기록 — sales_logs에 customer_name 컬럼을 쓰지 않음 (스키마 캐시 에러 방지)
+  const corePayload: Record<string, unknown> = {
     product_id: productId,
     day_number: dayNumber,
     sold_from: soldFrom,
     quantity,
     total_price: totalPrice,
   };
-  if (paymentGroupId) salePayload.payment_group_id = paymentGroupId;
-  if (orderId) salePayload.order_id = orderId;
-  if (customerName != null && customerName !== "") {
-    salePayload.customer_name = customerName;
-  }
 
-  const { error: saleError } = await supabase.from("sales_logs").insert(salePayload);
+  const withGroup: Record<string, unknown> = { ...corePayload };
+  if (paymentGroupId) withGroup.payment_group_id = paymentGroupId;
+  if (orderId) withGroup.order_id = orderId;
+
+  let { error: saleError } = await supabase.from("sales_logs").insert(withGroup);
+
+  // payment_group_id / order_id 미마이그레이션 → 핵심 컬럼만 재시도
+  if (
+    saleError &&
+    /payment_group_id|order_id|customer_name|schema cache|could not find/i.test(
+      saleError.message
+    )
+  ) {
+    const retry = await supabase.from("sales_logs").insert(corePayload);
+    saleError = retry.error;
+  }
 
   if (saleError) {
     // 재고는 이미 차감됨 — 복구 시도
@@ -339,6 +347,7 @@ export async function checkoutKioskCart(params: {
       : `${Date.now()}-${Math.random().toString(16).slice(2)}`;
 
   for (const [productId, entry] of merged) {
+    // 워크인: order_id / customer_name 없이 결제 (null 허용)
     await registerSale({
       productId,
       dayNumber,
@@ -346,7 +355,6 @@ export async function checkoutKioskCart(params: {
       quantity: entry.quantity,
       unitPrice: entry.unitPrice,
       paymentGroupId,
-      customerName: "현장",
     });
   }
 }
