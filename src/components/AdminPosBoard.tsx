@@ -96,7 +96,15 @@ export default function AdminPosBoard() {
     setOrders((prev) => prev.filter((row) => row.id !== order.id));
 
     try {
-      await completePosPayment(order.id, eventDay);
+      await completePosPayment(
+        order.id,
+        eventDay,
+        order.items.map((item) => ({
+          productId: item.productId,
+          quantity: item.quantity,
+          productName: item.productName,
+        }))
+      );
     } catch (err) {
       const message =
         err instanceof Error

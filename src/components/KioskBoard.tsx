@@ -786,21 +786,20 @@ export default function KioskBoard() {
   async function handleCheckout() {
     if (cart.length === 0 || checkingOut) return;
 
+    // 결제 직전 스냅샷 — Realtime 재고 이벤트가 cart를 건드리지 못하게 고정
+    const cartSnapshot = cart.map((item) => ({
+      productId: item.id,
+      quantity: item.qty,
+      unitPrice: item.price,
+      productName: item.name,
+    }));
+
     setCheckingOut(true);
     try {
       if (activeSmartOrderId) {
         const paidOrderId = activeSmartOrderId;
-        // 수동 추가 품목 포함 — 화면 최종 장바구니 기준으로 결제
-        await completePosPayment(
-          paidOrderId,
-          eventDay,
-          cart.map((item) => ({
-            productId: item.id,
-            quantity: item.qty,
-            unitPrice: item.price,
-            productName: item.name,
-          }))
-        );
+        // 수기 추가 포함 — 화면 최종 장바구니 전체를 백엔드에 전달
+        await completePosPayment(paidOrderId, eventDay, cartSnapshot);
         const label = activeSmartLabel ?? "스마트 오더";
         // 결제 후 장바구니·스마트 오더 상태 초기화 → 다음 대기열 준비
         setCart([]);
@@ -814,15 +813,10 @@ export default function KioskBoard() {
       } else {
         await checkoutKioskCart({
           dayNumber: eventDay,
-          items: cart.map((item) => ({
-            productId: item.id,
-            quantity: item.qty,
-            unitPrice: item.price,
-            productName: item.name,
-          })),
+          items: cartSnapshot,
         });
 
-        const count = cart.length;
+        const count = cartSnapshot.length;
         setCart([]);
         setIsCartOpen(false);
         pushToast(`✅ 총 ${count}건 결제 완료!`, "success");

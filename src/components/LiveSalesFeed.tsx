@@ -2,10 +2,10 @@
 
 import { useEffect, useState } from "react";
 import { useEventDay } from "@/hooks/useEventDay";
-import { undoSaleGroup } from "@/lib/inventoryActions";
+import { undoSale, undoSaleGroup } from "@/lib/inventoryActions";
 import { fetchSalePaymentGroups } from "@/lib/fetchSalesReport";
 import { supabase } from "@/lib/supabase";
-import type { SalePaymentGroup } from "@/types/salesReport";
+import type { SalePaymentGroup, SalePaymentGroupItem } from "@/types/salesReport";
 
 function formatTime(value: string): string {
   if (!value) return "--:--";
@@ -22,18 +22,34 @@ function formatCurrency(value: number): string {
   return `${Number(value || 0).toLocaleString("ko-KR")}원`;
 }
 
-function formatItemsLine(group: SalePaymentGroup): string {
-  return group.items
-    .map((item) => `${item.productName} x ${item.quantity}`)
-    .join(", ");
+/** 4자리 번호 있으면 N번 손님, 없으면(워크인) 현장 손님 */
+function formatGuestLabel(customerName: string | null | undefined): string {
+  const raw = String(customerName ?? "").trim();
+  if (
+    !raw ||
+    raw === "현장" ||
+    raw === "손님" ||
+    raw === "현장 손님"
+  ) {
+    return "현장 손님";
+  }
+  if (/번\s*손님$/.test(raw)) return raw;
+  return `${raw}번 손님`;
+}
+
+function isWalkInGuest(customerName: string | null | undefined): boolean {
+  return formatGuestLabel(customerName) === "현장 손님";
 }
 
 export default function LiveSalesFeed() {
-  const { eventDay } = useEventDay();
+  const { eventDay, eventDayReady } = useEventDay();
   const [groups, setGroups] = useState<SalePaymentGroup[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [cancellingKey, setCancellingKey] = useState<string | null>(null);
+  const [cancellingGroupKey, setCancellingGroupKey] = useState<string | null>(
+    null
+  );
+  const [cancellingSaleId, setCancellingSaleId] = useState<string | null>(null);
 
   async function load(options?: { silent?: boolean }) {
     if (!options?.silent) {
@@ -57,11 +73,14 @@ export default function LiveSalesFeed() {
   }
 
   useEffect(() => {
+    if (!eventDayReady) return;
     void load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [eventDay]);
+  }, [eventDay, eventDayReady]);
 
   useEffect(() => {
+    if (!eventDayReady) return;
+
     let timer: number | null = null;
 
     const channel = supabase
@@ -83,20 +102,20 @@ export default function LiveSalesFeed() {
       void supabase.removeChannel(channel);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [eventDay]);
+  }, [eventDay, eventDayReady]);
 
   async function handleCancelGroup(group: SalePaymentGroup) {
-    if (cancellingKey) return;
+    if (cancellingGroupKey || cancellingSaleId) return;
 
-    const label = group.customerName?.trim() || "손님";
+    const label = formatGuestLabel(group.customerName);
     const ok = window.confirm(
-      label === "현장"
+      isWalkInGuest(group.customerName)
         ? "이 현장 결제 건 전체를 취소하시겠습니까?\n(취소 시 판매 기록에서 삭제되며 재고가 다시 복구됩니다.)"
-        : `${label}번 손님의 주문 전체를 취소하시겠습니까?\n(취소 시 판매 기록에서 삭제되며 재고가 다시 복구됩니다.)`
+        : `${label}의 주문 전체를 취소하시겠습니까?\n(취소 시 판매 기록에서 삭제되며 재고가 다시 복구됩니다.)`
     );
     if (!ok) return;
 
-    setCancellingKey(group.groupKey);
+    setCancellingGroupKey(group.groupKey);
     setGroups((prev) => prev.filter((row) => row.groupKey !== group.groupKey));
 
     try {
@@ -109,9 +128,55 @@ export default function LiveSalesFeed() {
       window.alert(message);
       void load({ silent: true });
     } finally {
-      setCancellingKey(null);
+      setCancellingGroupKey(null);
     }
   }
+
+  async function handleCancelItem(
+    group: SalePaymentGroup,
+    item: SalePaymentGroupItem
+  ) {
+    if (cancellingGroupKey || cancellingSaleId) return;
+
+    const ok = window.confirm(
+      "해당 품목만 결제 취소 및 재고를 원복하시겠습니까?"
+    );
+    if (!ok) return;
+
+    setCancellingSaleId(item.saleId);
+
+    // 낙관적 UI: 품목 제거 + 총액 차감, 품목 없으면 그룹 삭제
+    setGroups((prev) =>
+      prev
+        .map((row) => {
+          if (row.groupKey !== group.groupKey) return row;
+          const nextItems = row.items.filter((i) => i.saleId !== item.saleId);
+          const nextSaleIds = row.saleIds.filter((id) => id !== item.saleId);
+          return {
+            ...row,
+            items: nextItems,
+            saleIds: nextSaleIds,
+            totalPrice: Math.max(0, row.totalPrice - item.totalPrice),
+          };
+        })
+        .filter((row) => row.items.length > 0)
+    );
+
+    try {
+      await undoSale(item.saleId);
+      window.alert("해당 품목 취소 및 재고 복구가 완료되었습니다.");
+    } catch (err) {
+      console.error("[LiveSalesFeed] undoSale 실패", err);
+      const message =
+        err instanceof Error ? err.message : "개별 취소에 실패했습니다.";
+      window.alert(message);
+      void load({ silent: true });
+    } finally {
+      setCancellingSaleId(null);
+    }
+  }
+
+  const busy = cancellingGroupKey !== null || cancellingSaleId !== null;
 
   return (
     <div className="mx-auto w-full max-w-3xl px-4 py-6 sm:px-6">
@@ -133,7 +198,7 @@ export default function LiveSalesFeed() {
         </div>
       )}
 
-      {loading ? (
+      {loading || !eventDayReady ? (
         <div className="space-y-3">
           {Array.from({ length: 5 }).map((_, index) => (
             <div
@@ -154,39 +219,67 @@ export default function LiveSalesFeed() {
       ) : (
         <ul className="space-y-3">
           {groups.map((group) => {
-            const isCancelling = cancellingKey === group.groupKey;
+            const isCancellingGroup = cancellingGroupKey === group.groupKey;
             return (
               <li
                 key={group.groupKey}
                 className="rounded-2xl border border-slate-200 bg-white px-4 py-3.5 shadow-sm sm:px-5"
               >
                 <div className="flex items-start justify-between gap-3">
-                  <div className="min-w-0">
-                    <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
-                      <time className="text-sm font-bold tabular-nums text-sky-700">
-                        {formatTime(group.createdAt)}
-                      </time>
-                      <span className="text-sm font-bold text-slate-900">
-                        손님 번호: {group.customerName}
-                      </span>
-                    </div>
-                    <p className="mt-2 text-sm leading-relaxed text-slate-700">
-                      {formatItemsLine(group)}
-                    </p>
-                    <p className="mt-2 text-base font-extrabold tabular-nums text-emerald-700">
-                      총 {formatCurrency(group.totalPrice)}
-                    </p>
+                  <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+                    <time className="text-sm font-bold tabular-nums text-sky-700">
+                      {formatTime(group.createdAt)}
+                    </time>
+                    <span className="text-sm font-bold text-slate-900">
+                      {formatGuestLabel(group.customerName)}
+                    </span>
                   </div>
                   <button
                     type="button"
-                    disabled={cancellingKey !== null}
+                    disabled={busy}
                     onClick={() => void handleCancelGroup(group)}
                     className="shrink-0 rounded-md border border-gray-200 bg-gray-50 px-3 py-1.5 text-xs font-medium text-gray-400 transition-all duration-200 hover:border-red-200 hover:bg-red-50 hover:text-red-600 disabled:opacity-40"
                     title="결제 건 전체 취소 · 재고 원복"
                   >
-                    {isCancelling ? "취소 중…" : "결제 취소"}
+                    {isCancellingGroup ? "취소 중…" : "전체 취소"}
                   </button>
                 </div>
+
+                <ul className="mt-3 space-y-1.5 border-t border-slate-100 pt-3">
+                  {group.items.map((item) => {
+                    const isCancellingItem = cancellingSaleId === item.saleId;
+                    return (
+                      <li
+                        key={item.saleId}
+                        className="flex items-center gap-2 text-sm"
+                      >
+                        <span className="min-w-0 flex-1 truncate text-slate-800">
+                          {item.productName}
+                          <span className="text-slate-500">
+                            {" "}
+                            x {item.quantity}
+                          </span>
+                        </span>
+                        <span className="shrink-0 tabular-nums font-semibold text-slate-700">
+                          {formatCurrency(item.totalPrice)}
+                        </span>
+                        <button
+                          type="button"
+                          disabled={busy}
+                          onClick={() => void handleCancelItem(group, item)}
+                          className="shrink-0 rounded border border-gray-200 bg-gray-50 px-2 py-0.5 text-[10px] font-medium text-gray-400 transition-all duration-200 hover:border-red-200 hover:bg-red-50 hover:text-red-600 disabled:opacity-40"
+                          title="이 품목만 취소"
+                        >
+                          {isCancellingItem ? "…" : "개별 취소"}
+                        </button>
+                      </li>
+                    );
+                  })}
+                </ul>
+
+                <p className="mt-3 border-t border-slate-100 pt-2.5 text-right text-base font-extrabold tabular-nums text-emerald-700">
+                  총 {formatCurrency(group.totalPrice)}
+                </p>
               </li>
             );
           })}

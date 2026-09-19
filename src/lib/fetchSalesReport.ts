@@ -17,9 +17,38 @@ function toNumber(value: unknown): number {
   return 0;
 }
 
+function normalizeJoinedRelation<T extends object>(value: unknown): T | null {
+  if (!value) return null;
+  if (Array.isArray(value)) return (value[0] as T) ?? null;
+  return value as T;
+}
+
+/** sales_logs / orders / queues 에서 손님 4자리 번호 추출 */
+function resolveGuestCustomerName(options: {
+  salesCustomerName?: string | null;
+  orderCustomerName?: string | null;
+  queueCustomerName?: string | null;
+}): string | null {
+  const candidates = [
+    options.salesCustomerName,
+    options.orderCustomerName,
+    options.queueCustomerName,
+  ];
+  for (const raw of candidates) {
+    const value = String(raw ?? "").trim();
+    if (!value) continue;
+    // 워크인 표기·플레이스홀더는 조인 보강 대상으로 취급
+    if (value === "현장" || value === "손님" || value === "현장 손님") continue;
+    return value;
+  }
+  return null;
+}
+
 export async function fetchSaleLogsWithProducts(
   dayNumber?: EventDay
 ): Promise<SaleLogWithProduct[]> {
+  const selectWithJoin =
+    "id, product_id, day_number, sold_from, quantity, total_price, created_at, payment_group_id, order_id, customer_name, orders ( customer_name, queue_id, queues ( customer_name ) )";
   const selectWithGroup =
     "id, product_id, day_number, sold_from, quantity, total_price, created_at, payment_group_id, order_id, customer_name";
   const selectLegacy =
@@ -27,7 +56,7 @@ export async function fetchSaleLogsWithProducts(
 
   let salesQuery = supabase
     .from("sales_logs")
-    .select(selectWithGroup)
+    .select(selectWithJoin)
     .order("created_at", { ascending: false })
     .limit(1000);
 
@@ -36,6 +65,24 @@ export async function fetchSaleLogsWithProducts(
   }
 
   let salesResult = await salesQuery;
+  let usedJoin = !salesResult.error;
+
+  // FK/조인 미설정 시 기본 컬럼만
+  if (
+    salesResult.error &&
+    /orders|queues|relationship|foreign key/i.test(salesResult.error.message)
+  ) {
+    let fallbackQuery = supabase
+      .from("sales_logs")
+      .select(selectWithGroup)
+      .order("created_at", { ascending: false })
+      .limit(1000);
+    if (dayNumber != null) {
+      fallbackQuery = fallbackQuery.eq("day_number", dayNumber);
+    }
+    salesResult = await fallbackQuery;
+    usedJoin = false;
+  }
 
   // 마이그레이션 전 DB 호환
   if (
@@ -51,6 +98,7 @@ export async function fetchSaleLogsWithProducts(
       legacyQuery = legacyQuery.eq("day_number", dayNumber);
     }
     salesResult = await legacyQuery;
+    usedJoin = false;
   }
 
   const productsResult = await supabase
@@ -67,6 +115,37 @@ export async function fetchSaleLogsWithProducts(
     throw new Error(
       productsResult.error.message || "제품 정보를 불러오지 못했습니다."
     );
+  }
+
+  // 조인 실패 시 order_id로 orders→queues 일괄 보강
+  const orderGuestById = new Map<string, string>();
+  if (!usedJoin) {
+    const orderIds = [
+      ...new Set(
+        (salesResult.data ?? [])
+          .map((row) => {
+            const ext = row as { order_id?: string | null };
+            return ext.order_id ? String(ext.order_id) : "";
+          })
+          .filter(Boolean)
+      ),
+    ];
+    if (orderIds.length > 0) {
+      const { data: orderRows } = await supabase
+        .from("orders")
+        .select("id, customer_name, queues ( customer_name )")
+        .in("id", orderIds);
+      for (const row of orderRows ?? []) {
+        const queue = normalizeJoinedRelation<{ customer_name?: string | null }>(
+          row.queues
+        );
+        const guest = resolveGuestCustomerName({
+          orderCustomerName: row.customer_name as string | null,
+          queueCustomerName: queue?.customer_name,
+        });
+        if (guest) orderGuestById.set(String(row.id), guest);
+      }
+    }
   }
 
   const productMap = new Map(
@@ -87,7 +166,26 @@ export async function fetchSaleLogsWithProducts(
       payment_group_id?: string | null;
       order_id?: string | null;
       customer_name?: string | null;
+      orders?: unknown;
     };
+
+    const orderRel = normalizeJoinedRelation<{
+      customer_name?: string | null;
+      queues?: unknown;
+    }>(rowExt.orders);
+    const queueRel = normalizeJoinedRelation<{
+      customer_name?: string | null;
+    }>(orderRel?.queues);
+
+    const orderId = rowExt.order_id ? String(rowExt.order_id) : null;
+    const guestName =
+      resolveGuestCustomerName({
+        salesCustomerName: rowExt.customer_name,
+        orderCustomerName: orderRel?.customer_name,
+        queueCustomerName: queueRel?.customer_name,
+      }) ||
+      (orderId ? orderGuestById.get(orderId) ?? null : null);
+
     return {
       id: String(row.id),
       productId: String(row.product_id),
@@ -103,10 +201,8 @@ export async function fetchSaleLogsWithProducts(
       paymentGroupId: rowExt.payment_group_id
         ? String(rowExt.payment_group_id)
         : null,
-      orderId: rowExt.order_id ? String(rowExt.order_id) : null,
-      customerName: rowExt.customer_name
-        ? String(rowExt.customer_name).trim()
-        : null,
+      orderId,
+      customerName: guestName,
     };
   });
 }
@@ -144,7 +240,12 @@ export function groupSalesByPayment(
       existing.items.push(item);
       existing.saleIds.push(log.id);
       existing.totalPrice += log.totalPrice;
-      if (!existing.customerName && log.customerName) {
+      if (
+        (!existing.customerName ||
+          existing.customerName === "현장" ||
+          existing.customerName === "현장 손님") &&
+        log.customerName
+      ) {
         existing.customerName = log.customerName;
       }
     } else {
@@ -152,7 +253,8 @@ export function groupSalesByPayment(
         groupKey: key,
         paymentGroupId: log.paymentGroupId ?? null,
         orderId: log.orderId ?? null,
-        customerName: log.customerName?.trim() || "현장",
+        // 실제 4자리만 넣고, 없으면 빈 값 — UI에서 '현장 손님' 처리
+        customerName: log.customerName?.trim() || "",
         createdAt: log.createdAt,
         dayNumber: log.dayNumber,
         items: [item],

@@ -74,8 +74,11 @@ create table if not exists orders (
   queue_number integer not null,
   status text not null default 'shopping'
     check (status in ('shopping', 'pending', 'paid', 'cancelled', 'completed')),
+  total_price numeric not null default 0,
   created_at timestamptz not null default now()
 );
+
+-- 기존 DB: alter table public.orders add column if not exists total_price numeric not null default 0;
 
 -- 기존 DB: shopping 상태 허용 (1회 실행)
 -- alter table orders drop constraint if exists orders_status_check;

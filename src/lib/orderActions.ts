@@ -595,10 +595,14 @@ export async function loadSmartOrderForKiosk(orderId: string): Promise<{
 
 /**
  * 결제 완료 (스마트 오더 pending):
- * 0) 실시간 storage_qty 사전 검증 — 부족 시 즉시 중단 (매출/상태 변경 없음)
- * 1) 재고 차감
- * 2) orders → paid, queues → completed
- * 3) sales_logs INSERT
+ * 화면 최종 장바구니(수기 추가 포함)를 단일 소스로 사용한다.
+ *
+ * 0) storage_qty 사전 검증
+ * 1) order_items 전체 교체 (DELETE → INSERT) — 수기 품목 DB 반영
+ * 2) inventory.storage_qty 차감 (최종 장바구니 전 품목)
+ * 3) orders.total_price 갱신
+ * 4) orders → paid, queues → completed
+ * 5) sales_logs INSERT
  *
  * @param cartItems 키오스크 최종 장바구니(수동 추가 포함). 없으면 DB order_items 사용.
  */
@@ -620,22 +624,50 @@ export async function completePosPayment(
     dayNumber ??
     (typeof window !== "undefined" ? readStoredEventDay() : 1);
 
-  const { data: order, error: fetchError } = await supabase
-    .from("orders")
-    .select(
-      `
+  const useCartSnapshot = Array.isArray(cartItems) && cartItems.length > 0;
+
+  const orderSelectWithQueue = `
       id,
       queue_id,
       status,
+      customer_name,
+      queues ( customer_name, queue_number ),
       order_items (
         product_id,
         quantity,
         product_name
       )
-    `
-    )
+    `;
+  const orderSelectPlain = `
+      id,
+      queue_id,
+      status,
+      customer_name,
+      order_items (
+        product_id,
+        quantity,
+        product_name
+      )
+    `;
+
+  let { data: order, error: fetchError } = await supabase
+    .from("orders")
+    .select(orderSelectWithQueue)
     .eq("id", orderId)
     .single();
+
+  if (
+    fetchError &&
+    /queues|relationship|foreign key/i.test(fetchError.message)
+  ) {
+    const fallback = await supabase
+      .from("orders")
+      .select(orderSelectPlain)
+      .eq("id", orderId)
+      .single();
+    order = fallback.data;
+    fetchError = fallback.error;
+  }
 
   if (fetchError) {
     console.error("[completePosPayment] 주문 조회 실패", fetchError);
@@ -646,30 +678,52 @@ export async function completePosPayment(
     throw new Error("이미 처리된 주문입니다.");
   }
 
+  // 손님 4자리 번호 — orders ↔ queues 연결 보존 (결제·매출 기록에 동일 값 사용)
+  const queueRel = normalizeQueueRelation(
+    (order as { queues?: unknown }).queues
+  );
+  let guestLabel =
+    String(order.customer_name ?? "").trim() ||
+    String(queueRel?.customer_name ?? "").trim() ||
+    "";
+  const queueId = String(order.queue_id ?? "").trim();
+  if (!queueId) {
+    throw new Error("주문에 연결된 대기열(queue_id)이 없습니다.");
+  }
+
+  // 조인 실패·orders.customer_name 비어 있을 때 queues 직접 조회
+  if (!guestLabel) {
+    const { data: queueRow } = await supabase
+      .from("queues")
+      .select("customer_name")
+      .eq("id", queueId)
+      .maybeSingle();
+    guestLabel = String(queueRow?.customer_name ?? "").trim();
+  }
+
   // 최종 장바구니(수동 추가 포함) 우선 — 없으면 DB order_items
   const sourceItems: Array<{
     product_id: string;
     quantity: number;
     product_name: string;
     unit_price?: number;
-  }> =
-    cartItems && cartItems.length > 0
-      ? cartItems.map((item) => ({
-          product_id: String(item.productId ?? "").trim(),
-          quantity: Number(item.quantity) || 0,
-          product_name: String(item.productName ?? "제품").trim() || "제품",
-          unit_price:
-            typeof item.unitPrice === "number" && Number.isFinite(item.unitPrice)
-              ? item.unitPrice
-              : undefined,
-        }))
-      : (Array.isArray(order.order_items) ? order.order_items : []).map(
-          (item) => ({
-            product_id: String(item.product_id ?? "").trim(),
-            quantity: Number(item.quantity) || 0,
-            product_name: String(item.product_name ?? "제품").trim() || "제품",
-          })
-        );
+  }> = useCartSnapshot
+    ? cartItems!.map((item) => ({
+        product_id: String(item.productId ?? "").trim(),
+        quantity: Math.floor(Number(item.quantity) || 0),
+        product_name: String(item.productName ?? "제품").trim() || "제품",
+        unit_price:
+          typeof item.unitPrice === "number" && Number.isFinite(item.unitPrice)
+            ? item.unitPrice
+            : undefined,
+      }))
+    : (Array.isArray(order.order_items) ? order.order_items : []).map(
+        (item) => ({
+          product_id: String(item.product_id ?? "").trim(),
+          quantity: Math.floor(Number(item.quantity) || 0),
+          product_name: String(item.product_name ?? "제품").trim() || "제품",
+        })
+      );
 
   if (sourceItems.length === 0) {
     throw new Error("주문 품목이 없습니다.");
@@ -744,7 +798,6 @@ export async function completePosPayment(
     quantity: number;
     unitPrice: number;
     productName: string;
-    storageQty: number;
   };
 
   const prepared: SalePrep[] = [];
@@ -777,11 +830,50 @@ export async function completePosPayment(
       quantity: entry.quantity,
       unitPrice,
       productName,
-      storageQty,
     });
   }
 
-  // ── 1) 재고 차감 (검증 통과 후에만) ──
+  const orderTotal = prepared.reduce(
+    (sum, item) => sum + item.unitPrice * item.quantity,
+    0
+  );
+
+  // ── 1) order_items 전체 교체 — 화면 최종 장바구니(수기 포함)를 DB에 반영 ──
+  //    상태 paid 전환 전에 반드시 동기화해야 판매 기록·재고와 일치한다.
+  {
+    const { error: clearError } = await supabase
+      .from("order_items")
+      .delete()
+      .eq("order_id", orderId);
+
+    if (clearError) {
+      console.error("[completePosPayment] order_items 삭제 실패", clearError);
+      throw new Error(
+        clearError.message || "주문 품목 동기화(삭제)에 실패했습니다."
+      );
+    }
+
+    const { error: insertItemsError } = await supabase.from("order_items").insert(
+      prepared.map((item) => ({
+        order_id: orderId,
+        product_id: item.productId,
+        quantity: item.quantity,
+        product_name: item.productName,
+      }))
+    );
+
+    if (insertItemsError) {
+      console.error(
+        "[completePosPayment] order_items insert 실패",
+        insertItemsError
+      );
+      throw new Error(
+        insertItemsError.message || "주문 품목 동기화(저장)에 실패했습니다."
+      );
+    }
+  }
+
+  // ── 2) 재고 차감 (최종 장바구니 전 품목) ──
   for (const item of prepared) {
     const { data: inv, error: invError } = await supabase
       .from("inventory")
@@ -815,18 +907,43 @@ export async function completePosPayment(
     }
   }
 
-  // ── 2) orders / queues 상태 변경 ──
-  const [orderResult, queueResult] = await Promise.all([
-    supabase
+  // ── 3) 총액·손님번호 보존 후 status=paid (동기화·차감이 끝난 뒤에만) ──
+  const paidPayload: Record<string, unknown> = {
+    status: "paid",
+    total_price: orderTotal,
+    queue_id: queueId,
+  };
+  if (guestLabel) {
+    paidPayload.customer_name = guestLabel;
+  }
+
+  let orderResult = await supabase
+    .from("orders")
+    .update(paidPayload)
+    .eq("id", orderId)
+    .eq("status", "pending");
+
+  // total_price 컬럼 미마이그레이션 환경 폴백
+  if (
+    orderResult.error &&
+    /total_price/i.test(orderResult.error.message ?? "")
+  ) {
+    const fallbackPayload: Record<string, unknown> = {
+      status: "paid",
+      queue_id: queueId,
+    };
+    if (guestLabel) fallbackPayload.customer_name = guestLabel;
+    orderResult = await supabase
       .from("orders")
-      .update({ status: "paid" })
+      .update(fallbackPayload)
       .eq("id", orderId)
-      .eq("status", "pending"),
-    supabase
-      .from("queues")
-      .update({ status: "completed" })
-      .eq("id", order.queue_id),
-  ]);
+      .eq("status", "pending");
+  }
+
+  const queueResult = await supabase
+    .from("queues")
+    .update({ status: "completed" })
+    .eq("id", queueId);
 
   if (orderResult.error) {
     console.error("[completePosPayment] orders 상태 변경 실패", orderResult.error);
@@ -837,21 +954,11 @@ export async function completePosPayment(
     throw queueResult.error;
   }
 
-  // ── 3) 매출 기록 INSERT (검증·차감·상태 변경이 모두 끝난 뒤에만) ──
+  // ── 4) 매출 기록 INSERT (검증·품목동기화·차감·상태 변경이 모두 끝난 뒤에만) ──
   const paymentGroupId =
     typeof crypto !== "undefined" && "randomUUID" in crypto
       ? crypto.randomUUID()
       : `${Date.now()}-${Math.random().toString(16).slice(2)}`;
-
-  let customerName = "";
-  const { data: queueRow } = await supabase
-    .from("queues")
-    .select("customer_name")
-    .eq("id", order.queue_id)
-    .maybeSingle();
-  if (queueRow?.customer_name) {
-    customerName = String(queueRow.customer_name).trim();
-  }
 
   const saleRows = prepared.map((item) => ({
     product_id: item.productId,
@@ -861,7 +968,7 @@ export async function completePosPayment(
     total_price: item.unitPrice * item.quantity,
     payment_group_id: paymentGroupId,
     order_id: orderId,
-    customer_name: customerName || null,
+    customer_name: guestLabel || null,
   }));
 
   const { error: salesError } = await supabase
