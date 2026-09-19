@@ -75,7 +75,10 @@ export default function ManualProductForm() {
   }
 
   return (
-    <form onSubmit={(event) => void handleSubmit(event)} className="space-y-4">
+    <form
+      onSubmit={(event) => void handleSubmit(event)}
+      className="flex flex-col gap-5"
+    >
       <label className="block">
         <span className="mb-1.5 block text-sm font-medium text-slate-700">
           제품명
@@ -150,7 +153,7 @@ export default function ManualProductForm() {
       <button
         type="submit"
         disabled={submitting}
-        className="w-full rounded-xl bg-sky-600 px-4 py-3 text-sm font-bold text-white transition hover:bg-sky-500 disabled:cursor-not-allowed disabled:bg-slate-300"
+        className="mt-2 w-full rounded-xl bg-sky-600 px-4 py-3.5 text-sm font-bold text-white transition hover:bg-sky-500 disabled:cursor-not-allowed disabled:bg-slate-300"
       >
         {submitting ? "등록 중…" : "제품 수동 등록"}
       </button>
