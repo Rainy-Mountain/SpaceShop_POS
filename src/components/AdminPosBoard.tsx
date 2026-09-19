@@ -7,7 +7,7 @@ import {
   fetchPendingPosOrders,
   type PendingPosOrder,
 } from "@/lib/orderActions";
-import { subscribeOrdersRealtime } from "@/lib/realtimeOrders";
+import { subscribeOrdersRealtime, getDeletedOrderId } from "@/lib/realtimeOrders";
 
 /**
  * 매니저용 POS — pending 주문 Realtime + 결제 완료(매출 기록·재고 차감)
@@ -61,7 +61,12 @@ export default function AdminPosBoard() {
     const unsubscribe = subscribeOrdersRealtime({
       channelPrefix: "admin-pos-orders",
       includeOrderItems: true,
-      onChange: () => {
+      onChange: (payload) => {
+        const deletedId = getDeletedOrderId(payload);
+        if (deletedId) {
+          setOrders((prev) => prev.filter((row) => row.id !== deletedId));
+          return;
+        }
         scheduleReload();
       },
     });

@@ -5,12 +5,15 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { fetchInventoryDashboardData } from "@/lib/fetchInventory";
 import { getBrandInitialKey, KOREAN_INITIALS } from "@/lib/koreanInitial";
 import {
+  cancelPendingOrderByQueue,
   fetchPendingQtyByProduct,
   getAvailableQty,
   submitCustomerOrder,
   type CartItem,
 } from "@/lib/orderActions";
-import { subscribeOrdersRealtime } from "@/lib/realtimeOrders";
+import {
+  subscribeOrdersRealtime,
+} from "@/lib/realtimeOrders";
 import { supabase } from "@/lib/supabase";
 import type { DashboardRow } from "@/types/dashboard";
 
@@ -91,6 +94,10 @@ function toNumber(value: unknown): number {
     return Number.isFinite(parsed) ? parsed : 0;
   }
   return 0;
+}
+
+function formatPrice(value: number): string {
+  return `${Math.max(0, value).toLocaleString("ko-KR")}원`;
 }
 
 function matchesLiquorFilter(
@@ -208,7 +215,9 @@ export default function CustomerOrderBoard() {
   const [submittedOrderId, setSubmittedOrderId] = useState<string | null>(null);
   const [receiptItems, setReceiptItems] = useState<CartItem[]>([]);
   const [isPaid, setIsPaid] = useState(false);
+  const [retracting, setRetracting] = useState(false);
   const [addingId, setAddingId] = useState<string | null>(null);
+  const [isCartOpen, setIsCartOpen] = useState(false);
 
   const [companyFilter, setCompanyFilter] =
     useState<CompanyFilterValue>("전체");
@@ -370,7 +379,17 @@ export default function CustomerOrderBoard() {
     [cart]
   );
 
-  const cartLineCount = cart.length;
+  const cartTotalPrice = useMemo(
+    () =>
+      cart.reduce((sum, item) => {
+        const unit =
+          typeof item.price === "number" && Number.isFinite(item.price)
+            ? item.price
+            : products.find((p) => p.id === item.productId)?.price ?? 0;
+        return sum + unit * item.qty;
+      }, 0),
+    [cart, products]
+  );
 
   async function handleAddToCart(row: DashboardRow) {
     if (submitted || row.storageQty === 0) return;
@@ -402,7 +421,13 @@ export default function CustomerOrderBoard() {
         const existing = prev.find((item) => item.productId === row.id);
         if (existing) {
           return prev.map((item) =>
-            item.productId === row.id ? { ...item, qty: item.qty + 1 } : item
+            item.productId === row.id
+              ? {
+                  ...item,
+                  qty: item.qty + 1,
+                  price: item.price ?? row.price,
+                }
+              : item
           );
         }
         return [
@@ -412,12 +437,61 @@ export default function CustomerOrderBoard() {
             name: row.name,
             brand: row.brand,
             qty: 1,
+            price: row.price,
           },
         ];
       });
     } finally {
       setAddingId(null);
     }
+  }
+
+  async function changeCartQty(productId: string, delta: number) {
+    if (submitted || submitting) return;
+
+    const item = cart.find((row) => row.productId === productId);
+    if (!item) return;
+
+    const nextQty = item.qty + delta;
+    if (nextQty <= 0) {
+      setCart((prev) => prev.filter((row) => row.productId !== productId));
+      return;
+    }
+
+    if (delta > 0) {
+      let pendingMap = pendingByProduct;
+      try {
+        pendingMap = await fetchPendingQtyByProduct();
+        setPendingByProduct(pendingMap);
+      } catch (err) {
+        console.error(err);
+      }
+
+      const product = products.find((p) => p.id === productId);
+      const storageQty = product?.storageQty ?? 0;
+      const pendingQty = pendingMap.get(productId) ?? 0;
+      // cartQty를 현재 수량으로 두면 available = storage - pending - current
+      // 1개 더 담을 수 있는지: available >= 1
+      const available = getAvailableQty({
+        storageQty,
+        pendingQty,
+        cartQty: item.qty,
+      });
+      if (available < 1) {
+        window.alert(PENDING_WARN);
+        return;
+      }
+    }
+
+    setCart((prev) =>
+      prev.map((row) =>
+        row.productId === productId ? { ...row, qty: nextQty } : row
+      )
+    );
+  }
+
+  function removeFromCart(productId: string) {
+    setCart((prev) => prev.filter((row) => row.productId !== productId));
   }
 
   async function handleSubmitOrder() {
@@ -453,8 +527,9 @@ export default function CustomerOrderBoard() {
       window.alert(
         "주문서가 포스기로 전송되었습니다! 카운터로 와주세요."
       );
+      // 장바구니는 유지 — 주문 수정 시 이어서 편집 가능
       setSubmitted(true);
-      setCart([]);
+      setIsCartOpen(false);
     } catch (err) {
       console.error("[handleSubmitOrder] 제출 실패", err);
       const message =
@@ -469,6 +544,32 @@ export default function CustomerOrderBoard() {
       window.alert(`제출 실패: ${message}`);
     } finally {
       setSubmitting(false);
+    }
+  }
+
+  async function handleEditOrder() {
+    if (!queueId || retracting || isPaid) return;
+
+    const ok = window.confirm(
+      "제출한 주문서를 취소하고 장바구니를 다시 수정할까요?\n키오스크 대기열에서도 해당 주문이 사라집니다."
+    );
+    if (!ok) return;
+
+    setRetracting(true);
+    try {
+      await cancelPendingOrderByQueue(queueId, submittedOrderId);
+      // 장바구니 유지 (비어 있으면 제출 시 스냅샷으로 복구)
+      setCart((prev) => (prev.length > 0 ? prev : receiptItems));
+      setSubmitted(false);
+      setSubmittedOrderId(null);
+      setIsPaid(false);
+    } catch (err) {
+      console.error("[CustomerOrderBoard] 주문 수정(취소) 실패", err);
+      const message =
+        err instanceof Error ? err.message : "주문 취소에 실패했습니다.";
+      window.alert(`주문 수정 실패: ${message}`);
+    } finally {
+      setRetracting(false);
     }
   }
 
@@ -639,13 +740,22 @@ export default function CustomerOrderBoard() {
               ))}
             </ul>
           )}
+
+          <button
+            type="button"
+            disabled={retracting}
+            onClick={() => void handleEditOrder()}
+            className="mt-8 w-full rounded-xl border border-gray-200 bg-white px-4 py-3 text-sm font-semibold text-gray-600 transition hover:border-gray-300 hover:bg-gray-50 hover:text-gray-900 disabled:opacity-50"
+          >
+            {retracting ? "취소 중…" : "주문 내용 수정하기"}
+          </button>
         </div>
       </main>
     );
   }
 
   return (
-    <main className="flex min-h-screen w-full flex-col bg-gray-50 pb-24">
+    <main className="relative flex min-h-screen w-full flex-col bg-gray-50 pb-8">
       <header className="sticky top-0 z-20 border-b border-gray-200 bg-white px-3 pb-2.5 pt-3 sm:px-4">
         <div className="text-center">
           <h1 className="text-lg font-extrabold leading-tight tracking-tight text-gray-900 whitespace-pre-line sm:text-xl">
@@ -815,12 +925,12 @@ export default function CustomerOrderBoard() {
                           return (
                             <li
                               key={row.id}
-                              className="flex flex-col gap-2 px-1.5 py-2.5"
+                              className="flex flex-col gap-2 px-1.5 py-3"
                             >
-                              <div className="flex items-center gap-2">
+                              <div className="flex items-start gap-2">
                                 <p
                                   className={[
-                                    "min-w-0 flex-1 truncate text-sm leading-snug",
+                                    "min-w-0 flex-1 text-sm leading-snug",
                                     soldOut
                                       ? "text-gray-400 line-through"
                                       : "font-medium text-gray-800",
@@ -847,28 +957,38 @@ export default function CustomerOrderBoard() {
                                 </div>
                               </div>
 
-                              <div className="flex items-center justify-end gap-2">
-                                {inCart > 0 && (
-                                  <span className="text-xs font-medium text-sky-600">
-                                    담김 {inCart}
-                                  </span>
-                                )}
-                                <button
-                                  type="button"
-                                  disabled={
-                                    soldOut ||
-                                    addingId === row.id ||
-                                    submitting
-                                  }
-                                  onClick={() => void handleAddToCart(row)}
-                                  className="rounded-lg bg-gray-900 px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-gray-800 disabled:cursor-not-allowed disabled:bg-gray-200 disabled:text-gray-400"
+                              <div className="flex items-center justify-between gap-2">
+                                <p
+                                  className={[
+                                    "text-sm font-bold tabular-nums",
+                                    soldOut ? "text-gray-400" : "text-sky-700",
+                                  ].join(" ")}
                                 >
-                                  {soldOut
-                                    ? "품절"
-                                    : addingId === row.id
-                                      ? "확인 중…"
-                                      : "담기"}
-                                </button>
+                                  {formatPrice(row.price)}
+                                </p>
+                                <div className="flex items-center gap-2">
+                                  {inCart > 0 && (
+                                    <span className="text-xs font-medium text-sky-600">
+                                      담김 {inCart}
+                                    </span>
+                                  )}
+                                  <button
+                                    type="button"
+                                    disabled={
+                                      soldOut ||
+                                      addingId === row.id ||
+                                      submitting
+                                    }
+                                    onClick={() => void handleAddToCart(row)}
+                                    className="rounded-lg bg-gray-900 px-3.5 py-1.5 text-xs font-semibold text-white transition hover:bg-gray-800 disabled:cursor-not-allowed disabled:bg-gray-200 disabled:text-gray-400"
+                                  >
+                                    {soldOut
+                                      ? "품절"
+                                      : addingId === row.id
+                                        ? "확인 중…"
+                                        : "담기"}
+                                  </button>
+                                </div>
                               </div>
                             </li>
                           );
@@ -883,29 +1003,175 @@ export default function CustomerOrderBoard() {
         )}
       </div>
 
-      {/* 하단 장바구니 바 */}
-      <div className="fixed right-0 bottom-0 left-0 z-30 border-t border-gray-200 bg-white px-4 py-3 shadow-[0_-4px_12px_rgba(0,0,0,0.06)]">
-        <div className="mx-auto flex max-w-3xl items-center gap-3">
-          <p className="min-w-0 flex-1 text-sm font-medium text-gray-700">
-            {cartLineCount === 0
-              ? "장바구니가 비어 있습니다"
-              : `${cartLineCount}개 품목 담김`}
-            {cartItemCount > 0 && (
-              <span className="ml-1 text-gray-400">
-                (총 {cartItemCount}병)
-              </span>
-            )}
-          </p>
+      {/* FAB */}
+      <button
+        type="button"
+        onClick={() => setIsCartOpen(true)}
+        className="fixed right-5 bottom-5 z-40 flex h-14 w-14 items-center justify-center rounded-full bg-sky-600 text-white shadow-lg shadow-sky-900/25 transition hover:bg-sky-500 active:scale-95"
+        aria-label="장바구니 열기"
+      >
+        <svg
+          xmlns="http://www.w3.org/2000/svg"
+          viewBox="0 0 24 24"
+          fill="currentColor"
+          className="h-6 w-6"
+          aria-hidden
+        >
+          <path d="M2.25 2.25a.75.75 0 0 0 0 1.5h1.386c.17 0 .318.114.362.278l2.558 9.592a2.25 2.25 0 0 0 2.172 1.68h8.887a.75.75 0 0 0 0-1.5H8.728a.75.75 0 0 1-.724-.56l-.24-.9h9.51a2.25 2.25 0 0 0 2.205-1.755l1.32-5.94a.75.75 0 0 0-.727-.91H6.112L5.38 2.722A1.875 1.875 0 0 0 3.636 1.5H2.25Z" />
+          <path d="M8.25 19.5a1.5 1.5 0 1 1-3 0 1.5 1.5 0 0 1 3 0ZM18.75 19.5a1.5 1.5 0 1 1-3 0 1.5 1.5 0 0 1 3 0Z" />
+        </svg>
+        {cartItemCount > 0 && (
+          <span className="absolute -top-1 -right-1 flex h-5 min-w-5 items-center justify-center rounded-full bg-rose-500 px-1 text-[11px] font-bold text-white shadow">
+            {cartItemCount > 99 ? "99+" : cartItemCount}
+          </span>
+        )}
+      </button>
+
+      {/* Overlay */}
+      <button
+        type="button"
+        aria-label="장바구니 닫기"
+        onClick={() => setIsCartOpen(false)}
+        className={[
+          "fixed inset-0 z-40 bg-black/50 transition-opacity duration-300",
+          isCartOpen
+            ? "pointer-events-auto opacity-100"
+            : "pointer-events-none opacity-0",
+        ].join(" ")}
+      />
+
+      {/* Side Drawer */}
+      <aside
+        className={[
+          "fixed inset-y-0 right-0 z-50 flex w-full max-w-md transform flex-col bg-white shadow-2xl transition-transform duration-300 ease-out",
+          isCartOpen ? "translate-x-0" : "translate-x-full",
+        ].join(" ")}
+        aria-hidden={!isCartOpen}
+      >
+        <div className="flex items-center justify-between border-b border-gray-100 px-4 py-3.5">
+          <div>
+            <h2 className="text-base font-bold text-gray-900">장바구니</h2>
+            <p className="text-xs text-gray-400">
+              {cart.length === 0
+                ? "담긴 제품이 없습니다"
+                : `${cart.length}종류 · 총 ${cartItemCount}개`}
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={() => setIsCartOpen(false)}
+            className="flex h-9 w-9 items-center justify-center rounded-lg text-gray-400 transition hover:bg-gray-100 hover:text-gray-700"
+            aria-label="닫기"
+          >
+            <svg
+              xmlns="http://www.w3.org/2000/svg"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              className="h-5 w-5"
+              aria-hidden
+            >
+              <path d="M6 6l12 12M18 6 6 18" strokeLinecap="round" />
+            </svg>
+          </button>
+        </div>
+
+        <div className="min-h-0 flex-1 overflow-y-auto px-3 py-3">
+          {cart.length === 0 ? (
+            <div className="flex h-full min-h-[12rem] flex-col items-center justify-center text-sm text-gray-400">
+              <p>제품을 담아 주세요</p>
+            </div>
+          ) : (
+            <ul className="space-y-2">
+              {cart.map((item) => {
+                const unitPrice =
+                  typeof item.price === "number" && Number.isFinite(item.price)
+                    ? item.price
+                    : products.find((p) => p.id === item.productId)?.price ?? 0;
+
+                return (
+                  <li
+                    key={item.productId}
+                    className="rounded-xl border border-gray-100 bg-gray-50 px-3 py-3"
+                  >
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="min-w-0">
+                        <p className="truncate text-xs text-gray-400">
+                          {item.brand}
+                        </p>
+                        <p className="truncate text-sm font-semibold text-gray-900">
+                          {item.name}
+                        </p>
+                        <p className="mt-0.5 text-xs font-medium tabular-nums text-sky-700">
+                          {formatPrice(unitPrice)}
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => removeFromCart(item.productId)}
+                        className="shrink-0 rounded-lg px-2 py-1 text-xs font-semibold text-rose-600 hover:bg-rose-50"
+                      >
+                        삭제
+                      </button>
+                    </div>
+
+                    <div className="mt-2.5 flex items-center justify-between gap-2">
+                      <div className="inline-flex items-center gap-1 rounded-lg bg-white p-0.5 shadow-sm">
+                        <button
+                          type="button"
+                          onClick={() =>
+                            void changeCartQty(item.productId, -1)
+                          }
+                          className="flex h-9 w-9 items-center justify-center rounded-md text-lg font-bold text-gray-700 hover:bg-gray-100"
+                          aria-label="수량 감소"
+                        >
+                          −
+                        </button>
+                        <span className="min-w-[2rem] text-center text-base font-bold tabular-nums text-gray-900">
+                          {item.qty}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            void changeCartQty(item.productId, 1)
+                          }
+                          className="flex h-9 w-9 items-center justify-center rounded-md text-lg font-bold text-gray-700 hover:bg-gray-100"
+                          aria-label="수량 증가"
+                        >
+                          +
+                        </button>
+                      </div>
+                      <p className="text-sm font-bold tabular-nums text-gray-900">
+                        {formatPrice(unitPrice * item.qty)}
+                      </p>
+                    </div>
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+        </div>
+
+        <div className="border-t border-gray-200 bg-white px-4 py-4 shadow-[0_-4px_12px_rgba(0,0,0,0.04)]">
+          <div className="mb-3 flex items-end justify-between gap-2">
+            <span className="text-sm font-medium text-gray-600">
+              총 결제 예상 금액
+            </span>
+            <span className="text-xl font-extrabold tabular-nums text-sky-700">
+              {formatPrice(cartTotalPrice)}
+            </span>
+          </div>
           <button
             type="button"
             disabled={cart.length === 0 || submitting}
             onClick={() => void handleSubmitOrder()}
-            className="shrink-0 rounded-xl bg-sky-600 px-4 py-3 text-sm font-bold text-white transition hover:bg-sky-500 disabled:cursor-not-allowed disabled:bg-gray-300"
+            className="flex w-full items-center justify-center rounded-2xl bg-sky-600 px-4 py-3.5 text-base font-bold text-white shadow-md transition hover:bg-sky-500 active:scale-[0.99] disabled:cursor-not-allowed disabled:bg-gray-300 disabled:shadow-none"
           >
             {submitting ? "제출 중…" : "주문서 제출하기"}
           </button>
         </div>
-      </div>
+      </aside>
     </main>
   );
 }

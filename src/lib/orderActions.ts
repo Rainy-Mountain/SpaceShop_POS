@@ -7,6 +7,7 @@ export type CartItem = {
   name: string;
   brand: string;
   qty: number;
+  price?: number;
 };
 
 /** pending 주문서에 담긴 제품별 대기 수량 합계 */
@@ -568,6 +569,30 @@ const NIL_UUID = "00000000-0000-0000-0000-000000000000";
 
 export const SMART_ORDER_TRUNCATE_HINT =
   "Supabase 대시보드의 SQL Editor에서 'TRUNCATE TABLE queues CASCADE;' 명령어를 실행해 주세요.";
+
+/** 손님 주문 수정 — queue의 pending 주문만 삭제 (order_items CASCADE) */
+export async function cancelPendingOrderByQueue(
+  queueId: string,
+  orderId?: string | null
+): Promise<void> {
+  if (!queueId) throw new Error("대기열 ID가 없습니다.");
+
+  let query = supabase
+    .from("orders")
+    .delete()
+    .eq("queue_id", queueId)
+    .eq("status", "pending");
+
+  if (orderId) {
+    query = query.eq("id", orderId);
+  }
+
+  const { error } = await query;
+  if (error) {
+    console.error("[cancelPendingOrderByQueue] 삭제 실패", error);
+    throw new Error(error.message || "주문 삭제에 실패했습니다.");
+  }
+}
 
 /** 대기열 1건 삭제 (orders / order_items CASCADE) */
 export async function deleteQueueEntry(queueId: string): Promise<void> {

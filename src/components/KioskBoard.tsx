@@ -18,7 +18,7 @@ import {
   SMART_ORDER_TRUNCATE_HINT,
   type PendingPosOrder,
 } from "@/lib/orderActions";
-import { subscribeOrdersRealtime } from "@/lib/realtimeOrders";
+import { subscribeOrdersRealtime, getDeletedOrderId } from "@/lib/realtimeOrders";
 import { supabase } from "@/lib/supabase";
 import type { CompanyFilter, DashboardRow } from "@/types/dashboard";
 
@@ -424,7 +424,21 @@ export default function KioskBoard() {
     const unsubscribe = subscribeOrdersRealtime({
       channelPrefix: "kiosk-orders",
       includeOrderItems: true,
-      onChange: () => {
+      onChange: (payload) => {
+        // 손님 주문 수정(DELETE) 시 대기열에서 즉시 제거
+        const deletedId = getDeletedOrderId(payload);
+        if (deletedId) {
+          setPendingOrders((prev) =>
+            prev.filter((row) => row.id !== deletedId)
+          );
+          setActiveSmartOrderId((current) => {
+            if (current !== deletedId) return current;
+            setActiveSmartLabel(null);
+            setCart([]);
+            return null;
+          });
+          return;
+        }
         scheduleRefresh();
       },
     });

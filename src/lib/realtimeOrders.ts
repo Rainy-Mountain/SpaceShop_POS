@@ -22,7 +22,7 @@ type SubscribeOrdersOptions = {
 
 /**
  * orders(·order_items) Realtime 구독.
- * - INSERT / UPDATE 명시 구독
+ * - INSERT / UPDATE / DELETE 명시 구독
  * - 언마운트 시 channel.unsubscribe + removeChannel
  * - React Strict Mode 중복 구독 방지를 위해 채널명에 고유 suffix 사용
  */
@@ -79,6 +79,11 @@ export function subscribeOrdersRealtime(
         "postgres_changes",
         { event: "UPDATE", schema: "public", table: "orders" },
         handleChange
+      )
+      .on(
+        "postgres_changes",
+        { event: "DELETE", schema: "public", table: "orders" },
+        handleChange
       );
 
     if (options.includeOrderItems) {
@@ -113,4 +118,15 @@ export function subscribeOrdersRealtime(
   return () => {
     void supabase.removeChannel(channel);
   };
+}
+
+/** DELETE payload에서 삭제된 orders.id 추출 (REPLICA IDENTITY FULL 필요) */
+export function getDeletedOrderId(
+  payload: OrdersChangePayload
+): string | null {
+  if (payload.eventType !== "DELETE") return null;
+  if (payload.table && payload.table !== "orders") return null;
+  const oldRow = (payload.old ?? {}) as { id?: string };
+  const id = String(oldRow.id ?? "").trim();
+  return id || null;
 }

@@ -260,7 +260,31 @@ export default function StaffQrBoard() {
       .on(
         "postgres_changes",
         { event: "DELETE", schema: "public", table: "orders" },
-        scheduleRefresh
+        (payload) => {
+          const oldRow = (payload.old ?? {}) as {
+            id?: string;
+            queue_id?: string;
+          };
+          const deletedOrderId = String(oldRow.id ?? "").trim();
+          const queueId = String(oldRow.queue_id ?? "").trim();
+
+          if (deletedOrderId || queueId) {
+            setEntries((prev) =>
+              prev.map((entry) => {
+                const matchByOrder =
+                  deletedOrderId &&
+                  entry.pendingOrder?.id === deletedOrderId;
+                const matchByQueue = queueId && entry.id === queueId;
+                if (!matchByOrder && !matchByQueue) return entry;
+                return {
+                  ...entry,
+                  pendingOrder: null,
+                };
+              })
+            );
+          }
+          scheduleRefresh();
+        }
       )
       .on(
         "postgres_changes",
