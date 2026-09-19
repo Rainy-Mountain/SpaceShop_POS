@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
+  admitQueueEntry,
   clearAllSmartOrderTestData,
   deleteQueueEntry,
   sendOrderToPos,
@@ -32,7 +33,7 @@ type QueueEntry = {
   hideFromBoard: boolean;
 };
 
-type QueuePhase = "shopping" | "awaiting_payment";
+type QueuePhase = "waiting_entry" | "shopping" | "awaiting_payment";
 
 function normalizeOrdersRelation(orders: unknown): Array<{
   id?: string;
@@ -70,6 +71,10 @@ function normalizeItemsRelation(items: unknown): Array<{
   ];
 }
 
+function isEnteredStatus(status: string): boolean {
+  return status === "entered" || status === "ordering";
+}
+
 function mapQueueRow(row: {
   id?: string;
   queue_number?: number | string;
@@ -101,7 +106,6 @@ function mapQueueRow(row: {
       (order) => order.status === "shopping" || order.status === "pending"
     )
     .sort((a, b) => {
-      // pending 우선, 그다음 최신
       if (a.status !== b.status) {
         if (a.status === "pending") return -1;
         if (b.status === "pending") return 1;
@@ -140,6 +144,7 @@ function mapQueueRow(row: {
 
 function getPhase(entry: QueueEntry): QueuePhase {
   if (entry.activeOrder?.status === "pending") return "awaiting_payment";
+  if (entry.queueStatus === "waiting") return "waiting_entry";
   return "shopping";
 }
 
@@ -156,6 +161,7 @@ export default function StaffQrBoard() {
   const [listError, setListError] = useState<string | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [sendingId, setSendingId] = useState<string | null>(null);
+  const [admittingId, setAdmittingId] = useState<string | null>(null);
   const [clearingAll, setClearingAll] = useState(false);
 
   useEffect(() => {
@@ -335,6 +341,28 @@ export default function StaffQrBoard() {
     };
   }, [loadQueues, loadStorageMap]);
 
+  async function handleAdmitEntry(entry: QueueEntry) {
+    if (entry.queueStatus !== "waiting") return;
+
+    setAdmittingId(entry.id);
+    try {
+      await admitQueueEntry(entry.id);
+      setEntries((prev) =>
+        prev.map((row) =>
+          row.id === entry.id ? { ...row, queueStatus: "entered" } : row
+        )
+      );
+    } catch (err) {
+      console.error("[StaffQrBoard] admitQueueEntry 실패", err);
+      const message =
+        err instanceof Error ? err.message : "입장 승인에 실패했습니다.";
+      window.alert(message);
+      void loadQueues({ silent: true });
+    } finally {
+      setAdmittingId(null);
+    }
+  }
+
   async function handleSendToPos(entry: QueueEntry) {
     const order = entry.activeOrder;
     if (!order || order.status !== "shopping" || order.items.length === 0) {
@@ -508,153 +536,210 @@ export default function StaffQrBoard() {
                 아직 등록된 손님이 없습니다
               </p>
             ) : (
-              <ul className="space-y-2.5">
-                {entries.map((entry) => {
-                  const phase = getPhase(entry);
-                  const items = entry.activeOrder?.items ?? [];
-                  const hasSoldOut = items.some(
-                    (item) => storageByProduct.get(item.productId) === 0
+              <div className="space-y-6">
+                {(() => {
+                  const waitingEntries = entries.filter(
+                    (e) => getPhase(e) === "waiting_entry"
                   );
-                  const canSend =
-                    phase === "shopping" &&
-                    items.length > 0 &&
-                    entry.activeOrder?.status === "shopping" &&
-                    !hasSoldOut;
+                  const activeEntries = entries.filter(
+                    (e) => getPhase(e) !== "waiting_entry"
+                  );
 
-                  return (
-                    <li
-                      key={entry.id}
-                      className="rounded-xl border border-gray-100 bg-gray-50 px-3 py-3 sm:px-4"
-                    >
-                      <div className="flex items-start gap-3">
-                        <div className="flex h-12 w-14 shrink-0 flex-col items-center justify-center rounded-lg bg-white">
-                          <span className="text-[10px] font-medium text-gray-400">
-                            순번
-                          </span>
-                          <span className="text-xl font-black tabular-nums text-gray-900">
-                            {entry.queueNumber}
-                          </span>
-                        </div>
+                  function renderEntry(entry: QueueEntry) {
+                    const phase = getPhase(entry);
+                    const items = entry.activeOrder?.items ?? [];
+                    const hasSoldOut = items.some(
+                      (item) => storageByProduct.get(item.productId) === 0
+                    );
+                    const canSend =
+                      phase === "shopping" &&
+                      isEnteredStatus(entry.queueStatus) &&
+                      items.length > 0 &&
+                      entry.activeOrder?.status === "shopping" &&
+                      !hasSoldOut;
 
-                        <div className="min-w-0 flex-1">
-                          <div className="flex flex-wrap items-center gap-2">
-                            <p className="truncate text-base font-bold text-gray-900">
-                              {entry.customerName}
-                            </p>
-                            {phase === "shopping" ? (
-                              <span className="inline-flex items-center truncate rounded-md bg-gray-200/80 px-2 py-0.5 text-[11px] font-medium text-gray-600">
-                                🛒 모바일 쇼핑 중...
-                              </span>
+                    return (
+                      <li
+                        key={entry.id}
+                        className="rounded-xl border border-gray-100 bg-gray-50 px-3 py-3 sm:px-4"
+                      >
+                        <div className="flex items-start gap-3">
+                          <div className="flex h-12 w-14 shrink-0 flex-col items-center justify-center rounded-lg bg-white">
+                            <span className="text-[10px] font-medium text-gray-400">
+                              순번
+                            </span>
+                            <span className="text-xl font-black tabular-nums text-gray-900">
+                              {entry.queueNumber}
+                            </span>
+                          </div>
+
+                          <div className="min-w-0 flex-1">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <p className="truncate text-base font-bold text-gray-900">
+                                {entry.customerName}
+                              </p>
+                              {phase === "waiting_entry" ? (
+                                <span className="inline-flex items-center truncate rounded-md bg-amber-100 px-2 py-0.5 text-[11px] font-semibold text-amber-800">
+                                  ⏳ 입장 대기
+                                </span>
+                              ) : phase === "shopping" ? (
+                                <span className="inline-flex items-center truncate rounded-md bg-gray-200/80 px-2 py-0.5 text-[11px] font-medium text-gray-600">
+                                  🛒 쇼핑 중
+                                </span>
+                              ) : (
+                                <span className="inline-flex items-center truncate rounded-md bg-sky-100 px-2 py-0.5 text-[11px] font-semibold text-sky-700">
+                                  💳 결제 대기
+                                </span>
+                              )}
+                            </div>
+
+                            {phase === "waiting_entry" ? (
+                              <p className="mt-1 text-xs text-gray-400">
+                                메뉴 미리보기 중 · 입장 승인 대기
+                              </p>
+                            ) : items.length > 0 ? (
+                              <ul className="mt-2 space-y-1">
+                                {items.map((item) => {
+                                  const storage =
+                                    storageByProduct.get(item.productId) ??
+                                    null;
+                                  const soldOut = storage === 0;
+                                  const lowStock = storage === 1;
+                                  return (
+                                    <li
+                                      key={
+                                        item.id ||
+                                        `${item.productId}-${item.productName}`
+                                      }
+                                      className="flex items-start gap-1.5 text-xs leading-snug text-gray-600"
+                                    >
+                                      <span className="mt-0.5 text-gray-300">
+                                        ·
+                                      </span>
+                                      <span className="min-w-0 flex-1">
+                                        <span
+                                          className={[
+                                            "font-medium",
+                                            soldOut
+                                              ? "text-red-700 line-through"
+                                              : "text-gray-700",
+                                          ].join(" ")}
+                                        >
+                                          {item.productName}
+                                        </span>
+                                        <span className="text-gray-400">
+                                          {" "}
+                                          ({item.quantity}개)
+                                        </span>
+                                        {soldOut && (
+                                          <span className="ml-1.5 inline-flex align-middle rounded bg-red-600 px-1.5 py-0.5 text-[10px] font-bold text-white">
+                                            🚨 방금 품절됨
+                                          </span>
+                                        )}
+                                        {!soldOut && lowStock && (
+                                          <span className="ml-1.5 inline-flex align-middle rounded bg-red-100 px-1.5 py-0.5 text-[10px] font-bold text-red-600">
+                                            🚨 재고 1개
+                                          </span>
+                                        )}
+                                      </span>
+                                    </li>
+                                  );
+                                })}
+                              </ul>
                             ) : (
-                              <span className="inline-flex items-center truncate rounded-md bg-sky-100 px-2 py-0.5 text-[11px] font-semibold text-sky-700">
-                                💳 결제 대기
-                              </span>
+                              <p className="mt-1 text-xs text-gray-400">
+                                아직 담은 제품이 없습니다
+                              </p>
+                            )}
+                            {hasSoldOut && phase === "shopping" && (
+                              <p className="mt-2 text-[11px] font-semibold text-red-600">
+                                품절 품목 삭제 후 포스기 전송 가능
+                              </p>
                             )}
                           </div>
 
-                          {items.length > 0 ? (
-                            <ul className="mt-2 space-y-1">
-                              {items.map((item) => {
-                                const storage =
-                                  storageByProduct.get(item.productId) ?? null;
-                                const soldOut = storage === 0;
-                                const lowStock = storage === 1;
-                                return (
-                                  <li
-                                    key={
-                                      item.id ||
-                                      `${item.productId}-${item.productName}`
-                                    }
-                                    className="flex items-start gap-1.5 text-xs leading-snug text-gray-600"
-                                  >
-                                    <span className="mt-0.5 text-gray-300">
-                                      ·
-                                    </span>
-                                    <span className="min-w-0 flex-1">
-                                      <span
-                                        className={[
-                                          "font-medium",
-                                          soldOut
-                                            ? "text-red-700 line-through"
-                                            : "text-gray-700",
-                                        ].join(" ")}
-                                      >
-                                        {item.productName}
-                                      </span>
-                                      <span className="text-gray-400">
-                                        {" "}
-                                        ({item.quantity}개)
-                                      </span>
-                                      {soldOut && (
-                                        <span className="ml-1.5 inline-flex align-middle rounded bg-red-600 px-1.5 py-0.5 text-[10px] font-bold text-white">
-                                          🚨 방금 품절됨
-                                        </span>
-                                      )}
-                                      {!soldOut && lowStock && (
-                                        <span className="ml-1.5 inline-flex align-middle rounded bg-red-100 px-1.5 py-0.5 text-[10px] font-bold text-red-600">
-                                          🚨 재고 1개
-                                        </span>
-                                      )}
-                                    </span>
-                                  </li>
-                                );
-                              })}
-                            </ul>
-                          ) : (
-                            <p className="mt-1 text-xs text-gray-400">
-                              아직 담은 제품이 없습니다
-                            </p>
-                          )}
-                          {hasSoldOut && phase === "shopping" && (
-                            <p className="mt-2 text-[11px] font-semibold text-red-600">
-                              품절 품목 삭제 후 포스기 전송 가능
-                            </p>
-                          )}
-                        </div>
-
-                        <div className="flex shrink-0 flex-col items-end gap-2">
-                          {phase === "shopping" &&
-                            items.length > 0 &&
-                            entry.activeOrder?.status === "shopping" && (
+                          <div className="flex shrink-0 flex-col items-end gap-2">
+                            {phase === "waiting_entry" && (
                               <button
                                 type="button"
-                                disabled={!canSend || sendingId === entry.id}
-                                onClick={() => void handleSendToPos(entry)}
-                                className="rounded-lg bg-sky-600 px-2.5 py-1.5 text-[11px] font-bold whitespace-nowrap text-white hover:bg-sky-500 disabled:cursor-not-allowed disabled:bg-slate-300"
+                                disabled={admittingId === entry.id}
+                                onClick={() => void handleAdmitEntry(entry)}
+                                className="rounded-lg bg-sky-600 px-2.5 py-1.5 text-[11px] font-bold whitespace-nowrap text-white hover:bg-sky-500 disabled:bg-slate-300"
                               >
-                                {sendingId === entry.id
-                                  ? "전송 중…"
-                                  : "포스기로 넘기기"}
+                                {admittingId === entry.id
+                                  ? "승인 중…"
+                                  : "입장 시키기"}
                               </button>
                             )}
-                          <button
-                            type="button"
-                            disabled={deletingId === entry.id}
-                            onClick={() => void handleDeleteEntry(entry)}
-                            className="flex h-6 w-6 items-center justify-center rounded text-gray-300 transition hover:text-gray-400 disabled:opacity-30"
-                            aria-label={`${entry.customerName} 대기열 삭제`}
-                            title="삭제"
-                          >
-                            <svg
-                              xmlns="http://www.w3.org/2000/svg"
-                              viewBox="0 0 24 24"
-                              fill="currentColor"
-                              className="h-3.5 w-3.5"
-                              aria-hidden
+                            {phase === "shopping" &&
+                              isEnteredStatus(entry.queueStatus) &&
+                              items.length > 0 &&
+                              entry.activeOrder?.status === "shopping" && (
+                                <button
+                                  type="button"
+                                  disabled={!canSend || sendingId === entry.id}
+                                  onClick={() => void handleSendToPos(entry)}
+                                  className="rounded-lg bg-sky-600 px-2.5 py-1.5 text-[11px] font-bold whitespace-nowrap text-white hover:bg-sky-500 disabled:cursor-not-allowed disabled:bg-slate-300"
+                                >
+                                  {sendingId === entry.id
+                                    ? "전송 중…"
+                                    : "포스기로 넘기기"}
+                                </button>
+                              )}
+                            <button
+                              type="button"
+                              disabled={deletingId === entry.id}
+                              onClick={() => void handleDeleteEntry(entry)}
+                              className="flex h-6 w-6 items-center justify-center rounded text-gray-300 transition hover:text-gray-400 disabled:opacity-30"
+                              aria-label={`${entry.customerName} 대기열 삭제`}
+                              title="삭제"
                             >
-                              <path
-                                fillRule="evenodd"
-                                d="M16.5 4.478v.227a48.816 48.816 0 0 1 3.878.512.75.75 0 1 1-.256 1.478l-.209-.035-1.005 12.054A3 3 0 0 1 15.916 21H8.084a3 3 0 0 1-2.992-2.786L4.087 6.66l-.209.035a.75.75 0 0 1-.256-1.478A48.567 48.567 0 0 1 7.5 4.705v-.227c0-1.564 1.213-2.927 2.71-3.346A48.788 48.788 0 0 1 12 1.5c1.276 0 2.54.078 3.79.233 1.497.419 2.71 1.782 2.71 3.346ZM6.844 6.75l.948 11.368a1.5 1.5 0 0 0 1.492 1.382h7.432a1.5 1.5 0 0 0 1.492-1.382l.948-11.368H6.844ZM9.75 9a.75.75 0 0 1 .75.75v6.75a.75.75 0 0 1-1.5 0V9.75A.75.75 0 0 1 9.75 9Zm4.5 0a.75.75 0 0 1 .75.75v6.75a.75.75 0 0 1-1.5 0V9.75a.75.75 0 0 1 .75-.75Z"
-                                clipRule="evenodd"
-                              />
-                            </svg>
-                          </button>
+                              <svg
+                                xmlns="http://www.w3.org/2000/svg"
+                                viewBox="0 0 24 24"
+                                fill="currentColor"
+                                className="h-3.5 w-3.5"
+                                aria-hidden
+                              >
+                                <path
+                                  fillRule="evenodd"
+                                  d="M16.5 4.478v.227a48.816 48.816 0 0 1 3.878.512.75.75 0 1 1-.256 1.478l-.209-.035-1.005 12.054A3 3 0 0 1 15.916 21H8.084a3 3 0 0 1-2.992-2.786L4.087 6.66l-.209.035a.75.75 0 0 1-.256-1.478A48.567 48.567 0 0 1 7.5 4.705v-.227c0-1.564 1.213-2.927 2.71-3.346A48.788 48.788 0 0 1 12 1.5c1.276 0 2.54.078 3.79.233 1.497.419 2.71 1.782 2.71 3.346ZM6.844 6.75l.948 11.368a1.5 1.5 0 0 0 1.492 1.382h7.432a1.5 1.5 0 0 0 1.492-1.382l.948-11.368H6.844ZM9.75 9a.75.75 0 0 1 .75.75v6.75a.75.75 0 0 1-1.5 0V9.75A.75.75 0 0 1 9.75 9Zm4.5 0a.75.75 0 0 1 .75.75v6.75a.75.75 0 0 1-1.5 0V9.75a.75.75 0 0 1 .75-.75Z"
+                                  clipRule="evenodd"
+                                />
+                              </svg>
+                            </button>
+                          </div>
                         </div>
-                      </div>
-                    </li>
+                      </li>
+                    );
+                  }
+
+                  return (
+                    <>
+                      {waitingEntries.length > 0 && (
+                        <section>
+                          <h3 className="mb-2 px-1 text-xs font-bold tracking-wide text-amber-700">
+                            ⏳ 입장 대기 ({waitingEntries.length})
+                          </h3>
+                          <ul className="space-y-2.5">
+                            {waitingEntries.map(renderEntry)}
+                          </ul>
+                        </section>
+                      )}
+                      {activeEntries.length > 0 && (
+                        <section>
+                          <h3 className="mb-2 px-1 text-xs font-bold tracking-wide text-gray-600">
+                            🛒 쇼핑·결제 ({activeEntries.length})
+                          </h3>
+                          <ul className="space-y-2.5">
+                            {activeEntries.map(renderEntry)}
+                          </ul>
+                        </section>
+                      )}
+                    </>
                   );
-                })}
-              </ul>
+                })()}
+              </div>
             )}
           </div>
         </section>

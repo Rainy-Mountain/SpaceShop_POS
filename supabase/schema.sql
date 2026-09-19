@@ -46,11 +46,17 @@ create table if not exists queues (
   queue_number integer not null,
   customer_name text not null,
   status text not null default 'waiting'
-    check (status in ('waiting', 'ordering', 'completed', 'cancelled')),
+    check (status in ('waiting', 'entered', 'ordering', 'completed', 'cancelled')),
   created_at timestamptz not null default now()
 );
 
 create index if not exists queues_queue_number_idx on queues (queue_number desc);
+
+-- 기존 DB: entered 상태 허용 (1회 실행)
+-- alter table queues drop constraint if exists queues_status_check;
+-- alter table queues add constraint queues_status_check
+--   check (status in ('waiting', 'entered', 'ordering', 'completed', 'cancelled'));
+
 
 -- 스마트 오더 주문서
 create table if not exists orders (

@@ -184,6 +184,27 @@ export async function syncShoppingCart(
   return { orderId };
 }
 
+/** 직원이 입장 승인: queues waiting → entered */
+export async function admitQueueEntry(queueId: string): Promise<void> {
+  if (!queueId) throw new Error("대기열 ID가 없습니다.");
+
+  const { data, error } = await supabase
+    .from("queues")
+    .update({ status: "entered" })
+    .eq("id", queueId)
+    .eq("status", "waiting")
+    .select("id")
+    .maybeSingle();
+
+  if (error) {
+    console.error("[admitQueueEntry] 실패", error);
+    throw new Error(error.message || "입장 승인에 실패했습니다.");
+  }
+  if (!data) {
+    throw new Error("입장 대기 손님을 찾을 수 없거나 이미 입장했습니다.");
+  }
+}
+
 /** 직원이 포스기로 넘기기: shopping → pending */
 export async function sendOrderToPos(orderId: string): Promise<void> {
   if (!orderId) throw new Error("주문 ID가 없습니다.");

@@ -268,6 +268,8 @@ export default function CustomerOrderBoard() {
   const [cartSyncError, setCartSyncError] = useState<string | null>(null);
   const [queueNumber, setQueueNumber] = useState<number | null>(null);
   const [customerName, setCustomerName] = useState<string>("");
+  /** waiting = 미리보기, entered/ordering = 쇼핑 가능 */
+  const [queueStatus, setQueueStatus] = useState<string | null>(null);
   /** 장바구니에 담긴 채 storage_qty가 0이 된 제품 (실시간 품절 노티) */
   const [justSoldOutIds, setJustSoldOutIds] = useState<Set<string>>(
     () => new Set()
@@ -292,21 +294,95 @@ export default function CustomerOrderBoard() {
     if (typeof window === "undefined" || !queueId) return;
     const activeQueueId = queueId;
 
-    void supabase
-      .from("queues")
-      .select("queue_number, customer_name")
-      .eq("id", activeQueueId)
-      .maybeSingle()
-      .then(({ data, error }) => {
-        if (error) {
-          console.error("[CustomerOrderBoard] queue 정보 조회 실패", error);
-          return;
+    let disposed = false;
+
+    async function loadQueueProfile() {
+      const { data, error } = await supabase
+        .from("queues")
+        .select("queue_number, customer_name, status")
+        .eq("id", activeQueueId)
+        .maybeSingle();
+      if (error) {
+        console.error("[CustomerOrderBoard] queue 정보 조회 실패", error);
+        return;
+      }
+      if (disposed || !data) return;
+      setQueueNumber(Number(data.queue_number) || null);
+      setCustomerName(String(data.customer_name ?? "").trim());
+      setQueueStatus(String(data.status ?? "waiting"));
+    }
+
+    void loadQueueProfile();
+
+    const channel = supabase
+      .channel(
+        `queue-entry:${activeQueueId}:${
+          typeof crypto !== "undefined" && "randomUUID" in crypto
+            ? crypto.randomUUID()
+            : Date.now()
+        }`
+      )
+      .on(
+        "postgres_changes",
+        {
+          event: "UPDATE",
+          schema: "public",
+          table: "queues",
+          filter: `id=eq.${activeQueueId}`,
+        },
+        (payload) => {
+          const next = (payload.new ?? {}) as {
+            status?: string;
+            queue_number?: number;
+            customer_name?: string;
+          };
+          if (next.status) setQueueStatus(String(next.status));
+          if (next.queue_number != null) {
+            setQueueNumber(Number(next.queue_number) || null);
+          }
+          if (next.customer_name != null) {
+            setCustomerName(String(next.customer_name).trim());
+          }
         }
-        if (!data) return;
-        setQueueNumber(Number(data.queue_number) || null);
-        setCustomerName(String(data.customer_name ?? "").trim());
-      });
+      )
+      .on(
+        "postgres_changes",
+        { event: "UPDATE", schema: "public", table: "queues" },
+        (payload) => {
+          const next = (payload.new ?? {}) as {
+            id?: string;
+            status?: string;
+            queue_number?: number;
+            customer_name?: string;
+          };
+          if (String(next.id ?? "") !== activeQueueId) return;
+          if (next.status) setQueueStatus(String(next.status));
+          if (next.queue_number != null) {
+            setQueueNumber(Number(next.queue_number) || null);
+          }
+          if (next.customer_name != null) {
+            setCustomerName(String(next.customer_name).trim());
+          }
+        }
+      )
+      .subscribe();
+
+    const poll = window.setInterval(() => {
+      void loadQueueProfile();
+    }, 4000);
+
+    return () => {
+      disposed = true;
+      window.clearInterval(poll);
+      void supabase.removeChannel(channel);
+    };
   }, [queueId]);
+
+  const isPreviewMode =
+    !submitted && (queueStatus === null || queueStatus === "waiting");
+  const canShop =
+    !submitted &&
+    (queueStatus === "entered" || queueStatus === "ordering");
 
   useEffect(() => {
     if (typeof window === "undefined" || !queueId) return;
@@ -578,7 +654,7 @@ export default function CustomerOrderBoard() {
   );
 
   async function persistCart(nextCart: CartItem[]) {
-    if (!queueId || submitted) return;
+    if (!queueId || submitted || !canShop) return;
     writeCartToStorage(queueId, nextCart);
     setSyncingCart(true);
     setCartSyncError(null);
@@ -597,7 +673,7 @@ export default function CustomerOrderBoard() {
   }
 
   async function handleAddToCart(row: DashboardRow) {
-    if (submitted || row.storageQty === 0) return;
+    if (!canShop || submitted || row.storageQty === 0) return;
 
     setAddingId(row.id);
     try {
@@ -641,7 +717,7 @@ export default function CustomerOrderBoard() {
   }
 
   async function changeCartQty(productId: string, delta: number) {
-    if (submitted) return;
+    if (!canShop || submitted) return;
 
     const item = cart.find((row) => row.productId === productId);
     if (!item) return;
@@ -681,7 +757,7 @@ export default function CustomerOrderBoard() {
   }
 
   async function removeFromCart(productId: string) {
-    if (submitted) return;
+    if (!canShop || submitted) return;
     const nextCart = cart.filter((row) => row.productId !== productId);
     setCart(nextCart);
     setJustSoldOutIds((prev) => {
@@ -941,9 +1017,22 @@ export default function CustomerOrderBoard() {
             {"스페이스 샵 4주년\n스마트 오더"}
           </h1>
           <p className="mt-1.5 text-xs text-gray-500">
-            원하는 제품을 담고 주문서를 제출해 주세요.
+            {isPreviewMode
+              ? "제품과 가격을 미리 확인해 보세요."
+              : "원하는 제품을 담고 직원에게 화면을 보여주세요."}
           </p>
         </div>
+
+        {isPreviewMode && (
+          <div className="mx-auto mt-3 max-w-xl rounded-xl border border-amber-200 bg-amber-50 px-3 py-2.5 text-center">
+            <p className="text-sm font-bold text-amber-800">
+              현재 입장 대기 중입니다.
+            </p>
+            <p className="mt-0.5 text-xs text-amber-700">
+              직원의 안내 후 장바구니 사용이 가능합니다.
+            </p>
+          </div>
+        )}
 
         <div className="relative mx-auto mt-3 max-w-xl">
           <span
@@ -1145,28 +1234,29 @@ export default function CustomerOrderBoard() {
                                 >
                                   {formatPrice(row.price)}
                                 </p>
-                                <div className="flex items-center gap-2">
-                                  {inCart > 0 && (
-                                    <span className="text-xs font-medium text-sky-600">
-                                      담김 {inCart}
-                                    </span>
-                                  )}
-                                  <button
-                                    type="button"
-                                    disabled={
-                                      soldOut ||
-                                      addingId === row.id
-                                    }
-                                    onClick={() => void handleAddToCart(row)}
-                                    className="rounded-lg bg-gray-900 px-3.5 py-1.5 text-xs font-semibold text-white transition hover:bg-gray-800 disabled:cursor-not-allowed disabled:bg-gray-200 disabled:text-gray-400"
-                                  >
-                                    {soldOut
-                                      ? "품절"
-                                      : addingId === row.id
-                                        ? "확인 중…"
-                                        : "담기"}
-                                  </button>
-                                </div>
+                                {canShop && (
+                                  <div className="flex items-center gap-2">
+                                    {inCart > 0 && (
+                                      <span className="text-xs font-medium text-sky-600">
+                                        담김 {inCart}
+                                      </span>
+                                    )}
+                                    <button
+                                      type="button"
+                                      disabled={
+                                        soldOut || addingId === row.id
+                                      }
+                                      onClick={() => void handleAddToCart(row)}
+                                      className="rounded-lg bg-gray-900 px-3.5 py-1.5 text-xs font-semibold text-white transition hover:bg-gray-800 disabled:cursor-not-allowed disabled:bg-gray-200 disabled:text-gray-400"
+                                    >
+                                      {soldOut
+                                        ? "품절"
+                                        : addingId === row.id
+                                          ? "확인 중…"
+                                          : "담기"}
+                                    </button>
+                                  </div>
+                                )}
                               </div>
                             </li>
                           );
@@ -1181,31 +1271,35 @@ export default function CustomerOrderBoard() {
         )}
       </div>
 
-      {/* FAB */}
-      <button
-        type="button"
-        onClick={() => setIsCartOpen(true)}
-        className="fixed right-5 bottom-5 z-40 flex h-14 w-14 items-center justify-center rounded-full bg-sky-600 text-white shadow-lg shadow-sky-900/25 transition hover:bg-sky-500 active:scale-95"
-        aria-label="장바구니 열기"
-      >
-        <svg
-          xmlns="http://www.w3.org/2000/svg"
-          viewBox="0 0 24 24"
-          fill="currentColor"
-          className="h-6 w-6"
-          aria-hidden
+      {/* FAB — 입장 승인 후에만 표시 */}
+      {canShop && (
+        <button
+          type="button"
+          onClick={() => setIsCartOpen(true)}
+          className="fixed right-5 bottom-5 z-40 flex h-14 w-14 items-center justify-center rounded-full bg-sky-600 text-white shadow-lg shadow-sky-900/25 transition hover:bg-sky-500 active:scale-95"
+          aria-label="장바구니 열기"
         >
-          <path d="M2.25 2.25a.75.75 0 0 0 0 1.5h1.386c.17 0 .318.114.362.278l2.558 9.592a2.25 2.25 0 0 0 2.172 1.68h8.887a.75.75 0 0 0 0-1.5H8.728a.75.75 0 0 1-.724-.56l-.24-.9h9.51a2.25 2.25 0 0 0 2.205-1.755l1.32-5.94a.75.75 0 0 0-.727-.91H6.112L5.38 2.722A1.875 1.875 0 0 0 3.636 1.5H2.25Z" />
-          <path d="M8.25 19.5a1.5 1.5 0 1 1-3 0 1.5 1.5 0 0 1 3 0ZM18.75 19.5a1.5 1.5 0 1 1-3 0 1.5 1.5 0 0 1 3 0Z" />
-        </svg>
-        {cartItemCount > 0 && (
-          <span className="absolute -top-1 -right-1 flex h-5 min-w-5 items-center justify-center rounded-full bg-rose-500 px-1 text-[11px] font-bold text-white shadow">
-            {cartItemCount > 99 ? "99+" : cartItemCount}
-          </span>
-        )}
-      </button>
+          <svg
+            xmlns="http://www.w3.org/2000/svg"
+            viewBox="0 0 24 24"
+            fill="currentColor"
+            className="h-6 w-6"
+            aria-hidden
+          >
+            <path d="M2.25 2.25a.75.75 0 0 0 0 1.5h1.386c.17 0 .318.114.362.278l2.558 9.592a2.25 2.25 0 0 0 2.172 1.68h8.887a.75.75 0 0 0 0-1.5H8.728a.75.75 0 0 1-.724-.56l-.24-.9h9.51a2.25 2.25 0 0 0 2.205-1.755l1.32-5.94a.75.75 0 0 0-.727-.91H6.112L5.38 2.722A1.875 1.875 0 0 0 3.636 1.5H2.25Z" />
+            <path d="M8.25 19.5a1.5 1.5 0 1 1-3 0 1.5 1.5 0 0 1 3 0ZM18.75 19.5a1.5 1.5 0 1 1-3 0 1.5 1.5 0 0 1 3 0Z" />
+          </svg>
+          {cartItemCount > 0 && (
+            <span className="absolute -top-1 -right-1 flex h-5 min-w-5 items-center justify-center rounded-full bg-rose-500 px-1 text-[11px] font-bold text-white shadow">
+              {cartItemCount > 99 ? "99+" : cartItemCount}
+            </span>
+          )}
+        </button>
+      )}
 
-      {/* Overlay */}
+      {/* Overlay + Drawer — 입장 승인 후에만 */}
+      {canShop && (
+        <>
       <button
         type="button"
         aria-label="장바구니 닫기"
@@ -1403,6 +1497,8 @@ export default function CustomerOrderBoard() {
           )}
         </div>
       </aside>
+        </>
+      )}
     </main>
   );
 }
