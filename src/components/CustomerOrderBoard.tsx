@@ -899,63 +899,31 @@ export default function CustomerOrderBoard() {
 
   if (submitted && isPaid) {
     return (
-      <main className="flex min-h-screen flex-col items-center justify-center bg-gray-50 px-4 py-10">
-        <div className="w-full max-w-md rounded-2xl border border-gray-200 bg-white p-6 shadow-sm sm:p-8">
-          <div className="flex flex-col items-center text-center">
-            <span className="flex h-16 w-16 items-center justify-center rounded-full bg-sky-600 text-white shadow-md">
-              <svg
-                xmlns="http://www.w3.org/2000/svg"
-                viewBox="0 0 24 24"
-                fill="currentColor"
-                className="h-9 w-9"
-                aria-hidden
-              >
-                <path
-                  fillRule="evenodd"
-                  d="M19.916 4.626a.75.75 0 0 1 .208 1.04l-9 13.5a.75.75 0 0 1-1.154.114l-6-6a.75.75 0 0 1 1.06-1.06l5.353 5.353 8.493-12.74a.75.75 0 0 1 1.04-.207Z"
-                  clipRule="evenodd"
-                />
-              </svg>
-            </span>
-            <h1 className="mt-5 text-2xl font-extrabold text-gray-900">
-              구매가 완료되었습니다.
-              <br />
-              감사합니다!
-            </h1>
-            <p className="mt-2 text-sm text-gray-500">
-              카운터에서 결제가 정상 처리되었습니다.
-            </p>
-          </div>
-
-          <div className="mt-8 border-t border-gray-100 pt-5">
-            <p className="text-xs font-semibold tracking-wide text-gray-400">
-              구매 내역
-            </p>
-            {receiptItems.length === 0 ? (
-              <p className="mt-3 text-sm text-gray-400">내역 없음</p>
-            ) : (
-              <ul className="mt-3 divide-y divide-gray-100">
-                {receiptItems.map((item) => (
-                  <li
-                    key={item.productId}
-                    className="flex items-center justify-between gap-3 py-3"
-                  >
-                    <div className="min-w-0">
-                      <p className="truncate text-xs text-gray-400">
-                        {item.brand}
-                      </p>
-                      <p className="truncate text-sm font-semibold text-gray-900">
-                        {item.name}
-                      </p>
-                    </div>
-                    <span className="shrink-0 text-sm font-bold tabular-nums text-sky-700">
-                      × {item.qty}
-                    </span>
-                  </li>
-                ))}
-              </ul>
-            )}
-          </div>
+      <main className="flex h-[100dvh] min-h-screen w-full flex-col items-center justify-center bg-white px-6">
+        <div className="flex flex-col items-center text-center">
+          <span
+            className="flex h-24 w-24 items-center justify-center rounded-full bg-sky-500 text-white"
+            aria-hidden
+          >
+            <svg
+              xmlns="http://www.w3.org/2000/svg"
+              viewBox="0 0 24 24"
+              fill="currentColor"
+              className="h-14 w-14"
+            >
+              <path
+                fillRule="evenodd"
+                d="M19.916 4.626a.75.75 0 0 1 .208 1.04l-9 13.5a.75.75 0 0 1-1.154.114l-6-6a.75.75 0 0 1 1.06-1.06l5.353 5.353 8.493-12.74a.75.75 0 0 1 1.04-.207Z"
+                clipRule="evenodd"
+              />
+            </svg>
+          </span>
+          <h1 className="mt-8 text-2xl font-extrabold tracking-tight text-gray-900 sm:text-3xl">
+            구매가 완료되었습니다!
+          </h1>
+          <p className="mt-3 text-base text-gray-500">
+            이용해 주셔서 감사합니다.
+          </p>
         </div>
       </main>
     );
