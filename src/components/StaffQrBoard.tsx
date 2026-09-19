@@ -498,15 +498,15 @@ export default function StaffQrBoard() {
           </section>
         </aside>
 
-        {/* 우측: 실시간 장바구니 현황 (넓은 영역 + 독립 스크롤) */}
+        {/* 우측: 대기자 리스트 (넓은 영역 + 독립 스크롤) */}
         <section className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-2xl border border-gray-200 bg-white shadow-sm lg:min-h-[calc(100vh-12rem)]">
           <div className="flex shrink-0 items-center justify-between border-b border-gray-100 px-5 py-3.5">
             <div>
               <h2 className="text-base font-bold text-gray-900">
-                실시간 장바구니 현황
+                대기자 리스트
               </h2>
               <p className="mt-0.5 text-xs text-gray-400">
-                담기/빼기 즉시 반영 · 포스기 전송
+                입장 승인 · 담기/빼기 즉시 반영 · 포스기 전송
               </p>
             </div>
             <span className="inline-flex items-center gap-1.5 rounded-full bg-emerald-50 px-2.5 py-1 text-[11px] font-semibold text-emerald-700">
@@ -745,16 +745,18 @@ export default function StaffQrBoard() {
         </section>
       </div>
 
-      {/* 테스트 초기화 — 우측 하단 구석, 거의 보이지 않게 */}
-      <button
-        type="button"
-        disabled={clearingAll}
-        onClick={() => void handleClearAll()}
-        className="fixed right-3 bottom-3 z-10 px-1 py-0.5 text-[10px] font-normal text-gray-300 transition hover:text-gray-400 disabled:opacity-40"
-        title="테스트 데이터 전체 초기화"
-      >
-        {clearingAll ? "…" : "테스트 초기화"}
-      </button>
+      {/* Footer — 레이아웃 바깥, 평범한 연한 글씨로 은닉 */}
+      <footer className="mt-8 shrink-0 border-t border-transparent pt-4 pb-1 text-center">
+        <button
+          type="button"
+          disabled={clearingAll}
+          onClick={() => void handleClearAll()}
+          className="text-xs font-normal text-gray-200 transition hover:text-gray-300 disabled:opacity-40"
+          title="테스트 데이터 전체 초기화"
+        >
+          {clearingAll ? "…" : "테스트 데이터 전체 초기화"}
+        </button>
+      </footer>
     </main>
   );
 }

@@ -1010,31 +1010,42 @@ export default function CustomerOrderBoard() {
   }
 
   return (
-    <main className="relative flex min-h-screen w-full flex-col bg-gray-50 pb-8">
-      <header className="sticky top-0 z-20 border-b border-gray-200 bg-white px-3 pb-2.5 pt-3 sm:px-4">
+    <main
+      className={[
+        "relative flex min-h-screen w-full flex-col bg-gray-50",
+        isPreviewMode ? "pb-16" : "pb-8",
+      ].join(" ")}
+    >
+      <header
+        className={[
+          "sticky top-0 z-20 border-b border-gray-200 bg-white",
+          isPreviewMode
+            ? "px-2 pb-2 pt-2.5 sm:px-3"
+            : "px-3 pb-2.5 pt-3 sm:px-4",
+        ].join(" ")}
+      >
         <div className="text-center">
-          <h1 className="text-lg font-extrabold leading-tight tracking-tight text-gray-900 whitespace-pre-line sm:text-xl">
+          <h1
+            className={[
+              "font-extrabold leading-tight tracking-tight text-gray-900 whitespace-pre-line",
+              isPreviewMode ? "text-base sm:text-lg" : "text-lg sm:text-xl",
+            ].join(" ")}
+          >
             {"스페이스 샵 4주년\n스마트 오더"}
           </h1>
-          <p className="mt-1.5 text-xs text-gray-500">
-            {isPreviewMode
-              ? "제품과 가격을 미리 확인해 보세요."
-              : "원하는 제품을 담고 직원에게 화면을 보여주세요."}
-          </p>
+          {!isPreviewMode && (
+            <p className="mt-1.5 text-xs text-gray-500">
+              원하는 제품을 담고 직원에게 화면을 보여주세요.
+            </p>
+          )}
         </div>
 
-        {isPreviewMode && (
-          <div className="mx-auto mt-3 max-w-xl rounded-xl border border-amber-200 bg-amber-50 px-3 py-2.5 text-center">
-            <p className="text-sm font-bold text-amber-800">
-              현재 입장 대기 중입니다.
-            </p>
-            <p className="mt-0.5 text-xs text-amber-700">
-              직원의 안내 후 장바구니 사용이 가능합니다.
-            </p>
-          </div>
-        )}
-
-        <div className="relative mx-auto mt-3 max-w-xl">
+        <div
+          className={[
+            "relative mx-auto max-w-xl",
+            isPreviewMode ? "mt-2" : "mt-3",
+          ].join(" ")}
+        >
           <span
             className="pointer-events-none absolute top-1/2 left-3 -translate-y-1/2 text-gray-400"
             aria-hidden
@@ -1060,7 +1071,7 @@ export default function CustomerOrderBoard() {
           />
         </div>
 
-        <div className="mt-2.5 space-y-2">
+        <div className={isPreviewMode ? "mt-2 space-y-1.5" : "mt-2.5 space-y-2"}>
           <div className={SCROLL_ROW}>
             {COMPANY_PILLS.map((pill) => (
               <PillButton
@@ -1085,7 +1096,8 @@ export default function CustomerOrderBoard() {
             type="button"
             onClick={() => setBrandSearchOpen((prev) => !prev)}
             className={[
-              "flex w-full items-center justify-center gap-1 rounded-xl py-2.5 text-sm font-medium transition",
+              "flex w-full items-center justify-center gap-1 rounded-xl text-sm font-medium transition",
+              isPreviewMode ? "py-2" : "py-2.5",
               brandSearchOpen || initialFilter !== "전체" || brandFilter
                 ? "bg-gray-900 text-white"
                 : "bg-gray-50 text-gray-500 hover:bg-gray-100",
@@ -1130,7 +1142,12 @@ export default function CustomerOrderBoard() {
         </div>
       </header>
 
-      <div className="min-h-0 flex-1 overflow-y-auto px-2 py-4 sm:px-4">
+      <div
+        className={[
+          "min-h-0 flex-1 overflow-y-auto",
+          isPreviewMode ? "px-1.5 py-2 sm:px-3" : "px-2 py-4 sm:px-4",
+        ].join(" ")}
+      >
         {error && (
           <div className="mb-3 rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">
             {error}
@@ -1138,11 +1155,20 @@ export default function CustomerOrderBoard() {
         )}
 
         {loading ? (
-          <div className="columns-1 gap-4 md:columns-2 xl:columns-3">
+          <div
+            className={[
+              "columns-1 md:columns-2 xl:columns-3",
+              isPreviewMode ? "gap-2" : "gap-4",
+            ].join(" ")}
+          >
             {Array.from({ length: 6 }).map((_, index) => (
               <div
                 key={index}
-                className="mb-4 break-inside-avoid"
+                className={
+                  isPreviewMode
+                    ? "mb-2 break-inside-avoid"
+                    : "mb-4 break-inside-avoid"
+                }
                 style={{ height: `${140 + (index % 3) * 48}px` }}
               >
                 <div className="h-full animate-pulse rounded-xl border border-gray-200 bg-white shadow-sm" />
@@ -1154,11 +1180,23 @@ export default function CustomerOrderBoard() {
             표시할 제품이 없습니다
           </p>
         ) : (
-          <div className="space-y-8">
+          <div className={isPreviewMode ? "space-y-4" : "space-y-8"}>
             {companyGroups.map((company) => (
               <section key={company.companyType}>
-                <div className="mb-4 flex items-end justify-between gap-3">
-                  <h2 className="truncate text-lg font-extrabold text-gray-900 sm:text-xl">
+                <div
+                  className={[
+                    "flex items-end justify-between gap-3",
+                    isPreviewMode ? "mb-2 px-0.5" : "mb-4",
+                  ].join(" ")}
+                >
+                  <h2
+                    className={[
+                      "truncate font-extrabold text-gray-900",
+                      isPreviewMode
+                        ? "text-base sm:text-lg"
+                        : "text-lg sm:text-xl",
+                    ].join(" ")}
+                  >
                     {company.label}
                   </h2>
                   <p className="shrink-0 text-xs text-gray-500">
@@ -1167,22 +1205,52 @@ export default function CustomerOrderBoard() {
                   </p>
                 </div>
 
-                <div className="columns-1 gap-4 md:columns-2 xl:columns-3">
+                <div
+                  className={[
+                    "columns-1 md:columns-2 xl:columns-3",
+                    isPreviewMode ? "gap-2" : "gap-4",
+                  ].join(" ")}
+                >
                   {company.brands.map((brandGroup) => (
                     <article
                       key={`${company.companyType}-${brandGroup.brand}`}
-                      className="mb-4 break-inside-avoid overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm"
+                      className={[
+                        "break-inside-avoid overflow-hidden border border-gray-200 bg-white shadow-sm",
+                        isPreviewMode
+                          ? "mb-2 rounded-lg"
+                          : "mb-4 rounded-xl",
+                      ].join(" ")}
                     >
-                      <div className="flex items-baseline justify-between gap-2 border-b border-gray-100 px-3.5 py-3">
-                        <h3 className="min-w-0 truncate text-base font-bold text-gray-900">
+                      <div
+                        className={[
+                          "flex items-baseline justify-between gap-2 border-b border-gray-100",
+                          isPreviewMode ? "px-3 py-2" : "px-3.5 py-3",
+                        ].join(" ")}
+                      >
+                        <h3
+                          className={[
+                            "min-w-0 truncate font-bold text-gray-900",
+                            isPreviewMode ? "text-sm" : "text-base",
+                          ].join(" ")}
+                        >
                           {brandGroup.brand}
                         </h3>
-                        <span className="shrink-0 text-sm font-semibold text-sky-600">
+                        <span
+                          className={[
+                            "shrink-0 font-semibold text-sky-600",
+                            isPreviewMode ? "text-xs" : "text-sm",
+                          ].join(" ")}
+                        >
                           {brandGroup.totalCount}개
                         </span>
                       </div>
 
-                      <ul className="divide-y divide-gray-100 px-2 py-1">
+                      <ul
+                        className={[
+                          "divide-y divide-gray-100",
+                          isPreviewMode ? "px-1.5 py-0.5" : "px-2 py-1",
+                        ].join(" ")}
+                      >
                         {brandGroup.products.map((row) => {
                           const soldOut = row.storageQty === 0;
                           const inCart =
@@ -1193,15 +1261,25 @@ export default function CustomerOrderBoard() {
                           return (
                             <li
                               key={row.id}
-                              className="flex flex-col gap-2 px-1.5 py-3"
+                              className={[
+                                "flex flex-col",
+                                isPreviewMode
+                                  ? "gap-1 px-1.5 py-2.5"
+                                  : "gap-2 px-1.5 py-3",
+                              ].join(" ")}
                             >
                               <div className="flex items-start gap-2">
                                 <p
                                   className={[
-                                    "min-w-0 flex-1 text-sm leading-snug",
+                                    "min-w-0 flex-1 leading-snug",
+                                    isPreviewMode
+                                      ? "text-[15px] font-semibold"
+                                      : "text-sm",
                                     soldOut
                                       ? "text-gray-400 line-through"
-                                      : "font-medium text-gray-800",
+                                      : isPreviewMode
+                                        ? "text-gray-900"
+                                        : "font-medium text-gray-800",
                                   ].join(" ")}
                                 >
                                   {row.name}
@@ -1228,7 +1306,8 @@ export default function CustomerOrderBoard() {
                               <div className="flex items-center justify-between gap-2">
                                 <p
                                   className={[
-                                    "text-sm font-bold tabular-nums",
+                                    "font-bold tabular-nums",
+                                    isPreviewMode ? "text-base" : "text-sm",
                                     soldOut ? "text-gray-400" : "text-sky-700",
                                   ].join(" ")}
                                 >
@@ -1270,6 +1349,18 @@ export default function CustomerOrderBoard() {
           </div>
         )}
       </div>
+
+      {/* 입장 대기 — 하단 플로팅 필 (시야 최소 가림) */}
+      {isPreviewMode && (
+        <div
+          role="status"
+          className="pointer-events-none fixed bottom-6 left-1/2 z-50 w-[min(92vw,22rem)] -translate-x-1/2 rounded-full bg-black/80 px-4 py-2.5 text-center shadow-lg"
+        >
+          <p className="text-sm font-medium leading-snug text-white">
+            현재 입장 대기 중 · 직원 안내 후 장바구니 사용 가능
+          </p>
+        </div>
+      )}
 
       {/* FAB — 입장 승인 후에만 표시 */}
       {canShop && (
