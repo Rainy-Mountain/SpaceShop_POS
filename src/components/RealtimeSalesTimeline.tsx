@@ -7,7 +7,8 @@ import type { EventDay } from "@/types/dashboard";
 import type { SaleLogWithProduct } from "@/types/salesReport";
 
 const EVENT_DAYS: EventDay[] = [1, 2, 3];
-const PER_DAY_LIMIT = 4;
+/** 일자별 렌더 상한 (스크롤로 탐색) */
+const PER_DAY_CAP = 100;
 
 function formatTime(value: string): string {
   if (!value) return "--:--";
@@ -30,6 +31,10 @@ function formatShortDate(value: string): string | null {
   }).format(date);
 }
 
+function formatCurrency(value: number): string {
+  return `${Number(value || 0).toLocaleString("ko-KR")}원`;
+}
+
 function groupLatestByDay(
   logs: SaleLogWithProduct[]
 ): Record<EventDay, SaleLogWithProduct[]> {
@@ -43,7 +48,7 @@ function groupLatestByDay(
   for (const log of logs) {
     const day = log.dayNumber as EventDay;
     if (day !== 1 && day !== 2 && day !== 3) continue;
-    if (grouped[day].length >= PER_DAY_LIMIT) continue;
+    if (grouped[day].length >= PER_DAY_CAP) continue;
     grouped[day].push(log);
   }
 
@@ -51,7 +56,7 @@ function groupLatestByDay(
 }
 
 /**
- * 1~3일차 가로 다단 · 각 컬럼 최신 4건 · sales_logs Realtime
+ * 1~3일차 가로 다단 · 고정 높이 스크롤 · sales_logs Realtime
  */
 export default function RealtimeSalesTimeline() {
   const [byDay, setByDay] = useState<Record<EventDay, SaleLogWithProduct[]>>({
@@ -174,11 +179,9 @@ export default function RealtimeSalesTimeline() {
     <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
       <div className="flex flex-wrap items-end justify-between gap-2 border-b border-slate-100 px-5 py-4">
         <div>
-          <h2 className="text-lg font-bold text-slate-900">
-            오늘의 실시간 판매 내역
-          </h2>
+          <h2 className="text-lg font-bold text-slate-900">일자별 판매 내역</h2>
           <p className="mt-1 text-sm text-slate-500">
-            일자별 최신 {PER_DAY_LIMIT}건 · 결제 완료 시 바로 반영
+            결제 완료 시 바로 반영 · 스크롤로 이전 내역 확인
           </p>
         </div>
         <span className="inline-flex items-center gap-1.5 rounded-full bg-emerald-50 px-2.5 py-1 text-[11px] font-semibold text-emerald-700">
@@ -200,49 +203,54 @@ export default function RealtimeSalesTimeline() {
         {dayTitles.map(({ day, title }) => {
           const sales = byDay[day];
           return (
-            <div key={day} className="min-w-0">
-              <h3 className="mb-3 border-b border-slate-100 pb-2 text-sm font-bold text-slate-800">
+            <div key={day} className="flex min-w-0 flex-col">
+              <h3 className="mb-3 shrink-0 border-b border-slate-100 pb-2 text-sm font-bold text-slate-800">
                 {title}
               </h3>
 
               {loading ? (
-                <ul className="space-y-2">
-                  {Array.from({ length: PER_DAY_LIMIT }).map((_, index) => (
+                <ul className="max-h-80 space-y-2 overflow-hidden">
+                  {Array.from({ length: 4 }).map((_, index) => (
                     <li
                       key={index}
-                      className="h-[3.25rem] animate-pulse rounded-lg border border-slate-100 bg-slate-50"
+                      className="h-16 animate-pulse rounded-lg border border-slate-100 bg-slate-50"
                     />
                   ))}
                 </ul>
               ) : sales.length === 0 ? (
-                <p className="rounded-lg border border-dashed border-slate-200 px-3 py-8 text-center text-xs text-slate-400">
+                <p className="flex max-h-80 items-center justify-center rounded-lg border border-dashed border-slate-200 px-3 py-8 text-center text-xs text-slate-400">
                   판매 기록 없음
                 </p>
               ) : (
-                <ul className="space-y-2">
+                <ul className="max-h-80 space-y-2 overflow-y-auto overscroll-contain pr-0.5 [-ms-overflow-style:none] [scrollbar-width:thin] [&::-webkit-scrollbar]:w-1.5 [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb]:bg-slate-300">
                   {sales.map((sale) => {
                     const isNew = highlightIds.has(sale.id);
                     return (
                       <li
                         key={sale.id}
                         className={[
-                          "rounded-lg border px-3 py-2.5 transition-colors duration-[1800ms] ease-out",
+                          "rounded-lg border px-3 py-2.5 sm:px-3.5 sm:py-3 transition-colors duration-[1800ms] ease-out",
                           isNew
                             ? "border-sky-200 bg-sky-100"
                             : "border-slate-200 bg-white",
                         ].join(" ")}
                       >
                         <div className="flex items-baseline justify-between gap-2">
-                          <time className="shrink-0 text-xs font-bold tabular-nums text-sky-700">
+                          <time className="shrink-0 text-xs font-bold tabular-nums text-sky-700 sm:text-sm">
                             {formatTime(sale.createdAt)}
                           </time>
-                          <span className="shrink-0 text-xs font-semibold tabular-nums text-slate-700">
+                          <span className="shrink-0 text-right text-xs font-bold tabular-nums text-emerald-700 sm:text-sm">
+                            {formatCurrency(sale.totalPrice)}
+                          </span>
+                        </div>
+                        <div className="mt-1.5 flex items-start justify-between gap-2">
+                          <p className="min-w-0 flex-1 text-sm font-semibold leading-snug text-slate-900 sm:text-[15px]">
+                            {sale.productName}
+                          </p>
+                          <span className="shrink-0 text-xs font-semibold tabular-nums text-slate-600">
                             {sale.quantity}개
                           </span>
                         </div>
-                        <p className="mt-1 truncate text-sm font-semibold leading-snug text-slate-900">
-                          {sale.productName}
-                        </p>
                       </li>
                     );
                   })}
