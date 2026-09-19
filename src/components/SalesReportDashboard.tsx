@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import RealtimeSalesTimeline from "@/components/RealtimeSalesTimeline";
 import { fetchSalesReport } from "@/lib/fetchSalesReport";
 import { supabase } from "@/lib/supabase";
 import type { SalesReportSummary } from "@/types/salesReport";
@@ -234,6 +235,8 @@ export default function SalesReportDashboard() {
               </div>
             </article>
           </section>
+
+          <RealtimeSalesTimeline />
 
           <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
             <div className="border-b border-slate-100 px-5 py-4">
