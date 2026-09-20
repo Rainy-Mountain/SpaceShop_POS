@@ -10,7 +10,7 @@ const PHONE_TAIL_RE = /^\d{4}$/;
 
 /** shadergradient.co 프리셋 — URL 쿼리만 바꿔서 배경을 교체할 수 있습니다. */
 const SHADER_GRADIENT_URL =
-  "https://www.shadergradient.co/customize?animate=on&axesHelper=off&brightness=1.2&cAzimuthAngle=180&cDistance=4.71&cPolarAngle=90&cameraZoom=1&color1=%23599eff&color2=%2365a6db&color3=%23e1d4d8&destination=onCanvas&embedMode=off&envPreset=city&format=gif&fov=45&frameRate=10&gizmoHelper=hide&grain=on&lightType=3d&pixelDensity=1&positionX=-1.4&positionY=0&positionZ=0&range=disabled&rangeEnd=40&rangeStart=0&reflection=0.1&rotationX=0&rotationY=10&rotationZ=50&shader=defaults&type=plane&uAmplitude=1&uDensity=1.3&uFrequency=5.5&uSpeed=0.2&uStrength=4&uTime=0&wireframe=false";
+  "https://www.shadergradient.co/customize?animate=on&axesHelper=off&brightness=1&cAzimuthAngle=180&cDistance=5.11&cPolarAngle=90&cameraZoom=1&color1=%235498ff&color2=%23dbc0b6&color3=%233967ac&destination=onCanvas&embedMode=off&envPreset=city&format=gif&fov=45&frameRate=10&gizmoHelper=hide&grain=on&lightType=3d&pixelDensity=1&positionX=-1.4&positionY=0&positionZ=0&range=enabled&rangeEnd=26.5&rangeStart=0&reflection=0.1&rotationX=0&rotationY=10&rotationZ=50&shader=defaults&type=plane&uAmplitude=1&uDensity=1.3&uFrequency=5.5&uSpeed=0.3&uStrength=4&uTime=0&wireframe=false";
 
 /**
  * 손님용 — 핸드폰 뒷자리 4자리로 이어하기 또는 신규 순번 발급 → /order?queue_id=…
