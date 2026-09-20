@@ -1,11 +1,16 @@
 "use client";
 
-import { useState, type FormEvent } from "react";
+import { useEffect, useState, type FormEvent } from "react";
 import { useRouter } from "next/navigation";
+import { ShaderGradientCanvas, ShaderGradient } from "@shadergradient/react";
 import { fetchStoreSettings } from "@/lib/storeSettings";
 import { supabase } from "@/lib/supabase";
 
 const PHONE_TAIL_RE = /^\d{4}$/;
+
+/** shadergradient.co 프리셋 — URL 쿼리만 바꿔서 배경을 교체할 수 있습니다. */
+const SHADER_GRADIENT_URL =
+  "https://www.shadergradient.co/customize?animate=on&axesHelper=off&brightness=1.2&cAzimuthAngle=180&cDistance=4.71&cPolarAngle=90&cameraZoom=1&color1=%23599eff&color2=%2365a6db&color3=%23e1d4d8&destination=onCanvas&embedMode=off&envPreset=city&format=gif&fov=45&frameRate=10&gizmoHelper=hide&grain=on&lightType=3d&pixelDensity=1&positionX=-1.4&positionY=0&positionZ=0&range=disabled&rangeEnd=40&rangeStart=0&reflection=0.1&rotationX=0&rotationY=10&rotationZ=50&shader=defaults&type=plane&uAmplitude=1&uDensity=1.3&uFrequency=5.5&uSpeed=0.2&uStrength=4&uTime=0&wireframe=false";
 
 /**
  * 손님용 — 핸드폰 뒷자리 4자리로 이어하기 또는 신규 순번 발급 → /order?queue_id=…
@@ -15,6 +20,11 @@ export default function QueueJoinBoard() {
   const [phoneTail, setPhoneTail] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [isMounted, setIsMounted] = useState(false);
+
+  useEffect(() => {
+    setIsMounted(true);
+  }, []);
 
   function handlePhoneChange(raw: string) {
     const digits = raw.replace(/\D/g, "").slice(0, 4);
@@ -113,51 +123,67 @@ export default function QueueJoinBoard() {
   const isValid = PHONE_TAIL_RE.test(phoneTail.trim());
 
   return (
-    <main className="flex min-h-screen flex-col bg-gray-50 px-4 py-10">
-      <div className="mx-auto w-full max-w-md">
-        <div className="text-center">
-          <h1 className="text-2xl font-extrabold leading-tight tracking-tight text-gray-900 whitespace-pre-line sm:text-3xl">
-            {"스페이스 샵 4주년\n스마트 오더 입장"}
-          </h1>
-          <p className="mt-2 text-sm text-gray-500">
-            핸드폰 뒷자리 4자리로 입장하거나, 이어서 주문하세요.
-          </p>
-        </div>
-
-        <form
-          onSubmit={(event) => void handleSubmit(event)}
-          className="mt-8 space-y-4 rounded-2xl border border-gray-200 bg-white p-5 shadow-sm"
-        >
-          <label className="block">
-            <span className="mb-1.5 block text-sm font-medium text-gray-700">
-              핸드폰 번호 뒷자리 4자리
-            </span>
-            <input
-              type="tel"
-              inputMode="numeric"
-              autoComplete="off"
-              maxLength={4}
-              value={phoneTail}
-              onChange={(e) => handlePhoneChange(e.target.value)}
-              placeholder="예: 1234"
-              className="w-full rounded-xl border border-gray-300 px-4 py-3 text-center text-2xl font-bold tracking-[0.35em] text-gray-900 outline-none ring-sky-500 focus:ring-2"
-            />
-          </label>
-
-          {error && (
-            <p className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
-              {error}
-            </p>
-          )}
-
-          <button
-            type="submit"
-            disabled={!isValid || loading}
-            className="w-full rounded-xl bg-sky-600 px-4 py-3.5 text-base font-bold text-white shadow-sm transition hover:bg-sky-700 disabled:cursor-not-allowed disabled:opacity-50"
+    <main className="relative w-full h-screen overflow-hidden">
+      <div className="absolute inset-0 z-0 pointer-events-none">
+        {isMounted && (
+          <ShaderGradientCanvas
+            style={{ width: "100%", height: "100%" }}
+            pointerEvents="none"
           >
-            {loading ? "처리 중…" : "입장하기"}
-          </button>
-        </form>
+            <ShaderGradient
+              control="query"
+              urlString={SHADER_GRADIENT_URL}
+            />
+          </ShaderGradientCanvas>
+        )}
+      </div>
+
+      <div className="relative z-10 w-full h-full flex flex-col items-center justify-center">
+        <div className="mx-auto w-full max-w-md px-4">
+          <div className="text-center">
+            <h1 className="text-2xl font-extrabold leading-tight tracking-tight text-white drop-shadow-md whitespace-pre-line sm:text-3xl">
+              {"스페이스 샵 4주년\n스마트 오더 입장"}
+            </h1>
+            <p className="mt-2 text-sm text-white/80">
+              핸드폰 뒷자리 4자리로 입장하거나, 이어서 주문하세요.
+            </p>
+          </div>
+
+          <form
+            onSubmit={(event) => void handleSubmit(event)}
+            className="mt-8 space-y-4 rounded-2xl border border-white/30 bg-white/20 p-8 shadow-2xl backdrop-blur-md"
+          >
+            <label className="block">
+              <span className="mb-1.5 block text-sm font-medium text-white/90">
+                핸드폰 번호 뒷자리 4자리
+              </span>
+              <input
+                type="tel"
+                inputMode="numeric"
+                autoComplete="off"
+                maxLength={4}
+                value={phoneTail}
+                onChange={(e) => handlePhoneChange(e.target.value)}
+                placeholder="예: 1234"
+                className="w-full rounded-xl border border-white/40 bg-white/25 px-4 py-3 text-center text-2xl font-bold tracking-[0.35em] text-white placeholder:text-white/40 outline-none ring-violet-300/60 backdrop-blur-sm focus:bg-white/35 focus:ring-2"
+              />
+            </label>
+
+            {error && (
+              <p className="rounded-lg border border-rose-300/50 bg-rose-500/25 px-3 py-2 text-sm text-white backdrop-blur-sm">
+                {error}
+              </p>
+            )}
+
+            <button
+              type="submit"
+              disabled={!isValid || loading}
+              className="w-full rounded-xl bg-violet-700/90 px-4 py-3.5 text-base font-bold text-white shadow-lg shadow-violet-900/30 transition hover:bg-violet-600 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {loading ? "처리 중…" : "입장하기"}
+            </button>
+          </form>
+        </div>
       </div>
     </main>
   );
