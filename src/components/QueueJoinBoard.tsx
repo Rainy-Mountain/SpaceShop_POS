@@ -123,23 +123,25 @@ export default function QueueJoinBoard() {
   const isValid = PHONE_TAIL_RE.test(phoneTail.trim());
 
   return (
-    <main className="relative w-full h-screen overflow-hidden">
-      <div className="absolute inset-0 z-0 pointer-events-none">
+    <main className="relative z-0 w-full">
+      <div className="fixed inset-0 w-full h-[100dvh] -z-10 bg-black pointer-events-none">
         {isMounted && (
-          <ShaderGradientCanvas
-            style={{ width: "100%", height: "100%" }}
-            pointerEvents="none"
-          >
-            <ShaderGradient
-              control="query"
-              urlString={SHADER_GRADIENT_URL}
-            />
-          </ShaderGradientCanvas>
+          <div style={{ width: "100vw", height: "100vh" }}>
+            <ShaderGradientCanvas
+              style={{ width: "100%", height: "100%" }}
+              pointerEvents="none"
+            >
+              <ShaderGradient
+                control="query"
+                urlString={SHADER_GRADIENT_URL}
+              />
+            </ShaderGradientCanvas>
+          </div>
         )}
       </div>
 
-      <div className="relative z-10 w-full h-full flex flex-col items-center justify-center">
-        <div className="mx-auto w-full max-w-md px-4">
+      <div className="relative z-10 w-full min-h-[100dvh] flex flex-col items-center justify-center overflow-y-auto">
+        <div className="mx-auto w-full max-w-md px-4 py-10">
           <div className="text-center">
             <h1 className="text-2xl font-extrabold leading-tight tracking-tight text-white drop-shadow-md whitespace-pre-line sm:text-3xl">
               {"스페이스 샵 4주년\n스마트 오더 입장"}
