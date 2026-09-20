@@ -10,6 +10,7 @@ const PUBLIC_PREFIXES = [
   "/customer",
   "/queue",
   "/order",
+  "/smart-lens",
 ];
 
 export default function AppShell({ children }: { children: ReactNode }) {
