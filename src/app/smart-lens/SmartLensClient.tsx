@@ -13,6 +13,43 @@ type LiquorRecognition = {
 
 const SCAN_INTERVAL_MS = 2000;
 const MOBILE_QUERY = "(max-width: 768px)";
+const CAMERA_ERROR_MESSAGE =
+  "카메라 접근 권한을 허용해 주시거나, HTTPS 환경에서 접속해 주세요.";
+
+function applyIosVideoFlags(video: HTMLVideoElement) {
+  video.setAttribute("playsinline", "true");
+  video.setAttribute("webkit-playsinline", "true");
+  video.setAttribute("autoplay", "true");
+  video.playsInline = true;
+  video.muted = true;
+  video.defaultMuted = true;
+  video.autoplay = true;
+}
+
+async function getRearCameraStream() {
+  const attempts: MediaStreamConstraints[] = [
+    {
+      audio: false,
+      video: { facingMode: { exact: "environment" } },
+    },
+    {
+      audio: false,
+      video: { facingMode: { ideal: "environment" } },
+    },
+  ];
+
+  let lastError: unknown;
+  for (const constraints of attempts) {
+    try {
+      return await navigator.mediaDevices.getUserMedia(constraints);
+    } catch (error) {
+      lastError = error;
+    }
+  }
+  throw lastError instanceof Error
+    ? lastError
+    : new Error("카메라 스트림을 시작할 수 없습니다.");
+}
 
 function formatEventPrice(price: number | null) {
   if (price === null || !Number.isFinite(price)) return null;
@@ -37,6 +74,7 @@ export default function SmartLensClient() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const inFlightRef = useRef(false);
+  const cancelledRef = useRef(false);
   const [isMobile, setIsMobile] = useState(false);
   const [cameraReady, setCameraReady] = useState(false);
   const [cameraError, setCameraError] = useState<string | null>(null);
@@ -51,56 +89,63 @@ export default function SmartLensClient() {
     return () => media.removeEventListener("change", sync);
   }, []);
 
-  useEffect(() => {
-    if (!isMobile) {
-      streamRef.current?.getTracks().forEach((track) => track.stop());
-      streamRef.current = null;
-      setCameraReady(false);
+  const stopCamera = useCallback(() => {
+    streamRef.current?.getTracks().forEach((track) => track.stop());
+    streamRef.current = null;
+    const video = videoRef.current;
+    if (video) video.srcObject = null;
+    setCameraReady(false);
+  }, []);
+
+  const startCamera = useCallback(async () => {
+    if (!window.isSecureContext || !navigator.mediaDevices?.getUserMedia) {
+      stopCamera();
+      setCameraError(CAMERA_ERROR_MESSAGE);
       return;
     }
 
-    let cancelled = false;
-
-    async function startCamera() {
-      try {
-        const stream = await navigator.mediaDevices.getUserMedia({
-          audio: false,
-          video: {
-            facingMode: { ideal: "environment" },
-            width: { ideal: 1280 },
-            height: { ideal: 720 },
-          },
-        });
-        if (cancelled) {
-          stream.getTracks().forEach((track) => track.stop());
-          return;
-        }
-        streamRef.current = stream;
-        const video = videoRef.current;
-        if (video) {
-          video.srcObject = stream;
-          await video.play();
-          setCameraReady(true);
-          setCameraError(null);
-        }
-      } catch (error) {
-        const message =
-          error instanceof Error && error.name === "NotAllowedError"
-            ? "카메라 권한이 필요합니다. 브라우저 설정에서 카메라를 허용해 주세요."
-            : "후면 카메라를 열 수 없습니다.";
-        setCameraError(message);
-        setCameraReady(false);
+    try {
+      const stream = await getRearCameraStream();
+      if (cancelledRef.current) {
+        stream.getTracks().forEach((track) => track.stop());
+        return;
       }
+      streamRef.current = stream;
+      const video = videoRef.current;
+      if (!video) {
+        stream.getTracks().forEach((track) => track.stop());
+        return;
+      }
+      applyIosVideoFlags(video);
+      video.srcObject = stream;
+      await video.play();
+      if (cancelledRef.current) {
+        stream.getTracks().forEach((track) => track.stop());
+        return;
+      }
+      setCameraReady(true);
+      setCameraError(null);
+    } catch (error) {
+      console.warn("[smart-lens] camera error", error);
+      stopCamera();
+      setCameraError(CAMERA_ERROR_MESSAGE);
+    }
+  }, [stopCamera]);
+
+  useEffect(() => {
+    if (!isMobile) {
+      cancelledRef.current = true;
+      stopCamera();
+      return;
     }
 
+    cancelledRef.current = false;
     void startCamera();
-
     return () => {
-      cancelled = true;
-      streamRef.current?.getTracks().forEach((track) => track.stop());
-      streamRef.current = null;
+      cancelledRef.current = true;
+      stopCamera();
     };
-  }, [isMobile]);
+  }, [isMobile, startCamera, stopCamera]);
 
   const captureAndRecognize = useCallback(async () => {
     if (inFlightRef.current) return;
@@ -187,11 +232,18 @@ export default function SmartLensClient() {
 
       <div className="relative hidden h-[100dvh] w-[100vw] overflow-hidden bg-black max-[768px]:block">
         <video
-          ref={videoRef}
+          ref={(element) => {
+            videoRef.current = element;
+            if (element) applyIosVideoFlags(element);
+          }}
           className="absolute inset-0 h-full w-full object-cover"
           autoPlay
           muted
           playsInline
+          controls={false}
+          disablePictureInPicture
+          disableRemotePlayback
+          webkit-playsinline="true"
         />
         <canvas ref={canvasRef} className="hidden" />
 
@@ -222,8 +274,17 @@ export default function SmartLensClient() {
         </div>
 
         {cameraError && (
-          <div className="absolute inset-x-6 top-16 z-10 rounded-2xl border border-white/15 bg-black/70 px-4 py-3 text-center text-sm text-white backdrop-blur-md">
-            {cameraError}
+          <div className="absolute inset-0 z-30 flex flex-col items-center justify-center bg-black/80 px-8 text-center">
+            <p className="max-w-xs text-sm leading-relaxed text-white/90">
+              {CAMERA_ERROR_MESSAGE}
+            </p>
+            <button
+              type="button"
+              onClick={() => window.location.reload()}
+              className="mt-5 rounded-full bg-amber-300 px-5 py-2.5 text-sm font-semibold text-zinc-950"
+            >
+              새로고침
+            </button>
           </div>
         )}
 
