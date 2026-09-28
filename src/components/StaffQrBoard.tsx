@@ -293,7 +293,7 @@ export default function StaffQrBoard() {
       .channel("staff-store-settings")
       .on(
         "postgres_changes",
-        { event: "*", schema: "public", table: "store_settings" },
+        { event: "*", schema: "sck", table: "store_settings" },
         (payload) => {
           const next = (payload.new ?? {}) as { auto_enter?: boolean };
           if (typeof next.auto_enter === "boolean") {
@@ -357,22 +357,22 @@ export default function StaffQrBoard() {
       .channel(`staff-qr-board:${suffix}`)
       .on(
         "postgres_changes",
-        { event: "*", schema: "public", table: "queues" },
+        { event: "*", schema: "sck", table: "queues" },
         scheduleRefresh
       )
       .on(
         "postgres_changes",
-        { event: "*", schema: "public", table: "orders" },
+        { event: "*", schema: "sck", table: "orders" },
         scheduleRefresh
       )
       .on(
         "postgres_changes",
-        { event: "*", schema: "public", table: "order_items" },
+        { event: "*", schema: "sck", table: "order_items" },
         scheduleRefresh
       )
       .on(
         "postgres_changes",
-        { event: "*", schema: "public", table: "inventory" },
+        { event: "*", schema: "sck", table: "inventory" },
         (payload) => {
           const next = (payload.new ?? {}) as {
             product_id?: string;

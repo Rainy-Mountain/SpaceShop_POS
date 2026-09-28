@@ -108,7 +108,7 @@ export default function SalesReportDashboard() {
       .channel("realtime:sales_report")
       .on(
         "postgres_changes",
-        { event: "*", schema: "public", table: "sales_logs" },
+        { event: "*", schema: "sck", table: "sales_logs" },
         (payload) => {
           console.log("📊 보고서 판매 실시간 수신:", payload);
           if (timer != null) window.clearTimeout(timer);

@@ -1,12 +1,12 @@
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 
-let browserClient: SupabaseClient | null = null;
+let browserClient: SupabaseClient<any, "sck", any> | null = null;
 
 /**
  * 브라우저에서만 Supabase 클라이언트를 생성한다.
  * 모듈 import / Vercel 빌드 시점에는 네트워크를 열지 않는다.
  */
-export function getSupabase(): SupabaseClient {
+export function getSupabase(): SupabaseClient<any, "sck", any> {
   if (typeof window === "undefined") {
     throw new Error(
       "Supabase client is browser-only. Call it inside useEffect or event handlers."
@@ -24,12 +24,13 @@ export function getSupabase(): SupabaseClient {
     );
   }
 
-  browserClient = createClient(supabaseUrl, supabaseAnonKey);
+  // 재고·주문 표는 Supabase의 sck 공간에 있다 (같은 프로젝트의 TASTEMARK와 분리, 2026-09-29)
+  browserClient = createClient(supabaseUrl, supabaseAnonKey, { db: { schema: "sck" } });
   return browserClient;
 }
 
 /** 지연 생성 프록시 — import만으로 createClient가 호출되지 않음 */
-export const supabase: SupabaseClient = new Proxy({} as SupabaseClient, {
+export const supabase: SupabaseClient<any, "sck", any> = new Proxy({} as SupabaseClient<any, "sck", any>, {
   get(_target, prop, receiver) {
     const client = getSupabase();
     const value = Reflect.get(client, prop, receiver);

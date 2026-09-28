@@ -120,7 +120,7 @@ function InventoryRealtimeSync({
       .channel("realtime:inventory_and_sales")
       .on(
         "postgres_changes",
-        { event: "UPDATE", schema: "public", table: "inventory" },
+        { event: "UPDATE", schema: "sck", table: "inventory" },
         (payload) => {
           console.log("🔄 재고 실시간 수신:", payload);
 
@@ -152,7 +152,7 @@ function InventoryRealtimeSync({
       )
       .on(
         "postgres_changes",
-        { event: "*", schema: "public", table: "sales_logs" },
+        { event: "*", schema: "sck", table: "sales_logs" },
         (payload) => {
           console.log("💰 판매 실시간 수신:", payload);
 

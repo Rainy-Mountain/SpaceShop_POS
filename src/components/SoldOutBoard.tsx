@@ -60,7 +60,7 @@ export default function SoldOutBoard() {
       .channel("realtime:soldout-board")
       .on(
         "postgres_changes",
-        { event: "*", schema: "public", table: "inventory" },
+        { event: "*", schema: "sck", table: "inventory" },
         () => {
           if (timer != null) window.clearTimeout(timer);
           timer = window.setTimeout(() => {

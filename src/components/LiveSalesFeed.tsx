@@ -89,7 +89,7 @@ export default function LiveSalesFeed() {
       .channel("realtime:sales-feed")
       .on(
         "postgres_changes",
-        { event: "*", schema: "public", table: "sales_logs" },
+        { event: "*", schema: "sck", table: "sales_logs" },
         () => {
           if (timer != null) window.clearTimeout(timer);
           timer = window.setTimeout(() => {

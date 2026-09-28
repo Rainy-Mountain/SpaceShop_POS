@@ -47,7 +47,7 @@ export function subscribeOrdersRealtime(
       "postgres_changes",
       {
         event: "UPDATE",
-        schema: "public",
+        schema: "sck",
         table: "orders",
         filter: `id=eq.${options.orderIdFilter}`,
       },
@@ -58,7 +58,7 @@ export function subscribeOrdersRealtime(
       "postgres_changes",
       {
         event: "UPDATE",
-        schema: "public",
+        schema: "sck",
         table: "orders",
       },
       (payload) => {
@@ -72,17 +72,17 @@ export function subscribeOrdersRealtime(
     channel = channel
       .on(
         "postgres_changes",
-        { event: "INSERT", schema: "public", table: "orders" },
+        { event: "INSERT", schema: "sck", table: "orders" },
         handleChange
       )
       .on(
         "postgres_changes",
-        { event: "UPDATE", schema: "public", table: "orders" },
+        { event: "UPDATE", schema: "sck", table: "orders" },
         handleChange
       )
       .on(
         "postgres_changes",
-        { event: "DELETE", schema: "public", table: "orders" },
+        { event: "DELETE", schema: "sck", table: "orders" },
         handleChange
       );
 
@@ -90,17 +90,17 @@ export function subscribeOrdersRealtime(
       channel = channel
         .on(
           "postgres_changes",
-          { event: "INSERT", schema: "public", table: "order_items" },
+          { event: "INSERT", schema: "sck", table: "order_items" },
           handleChange
         )
         .on(
           "postgres_changes",
-          { event: "UPDATE", schema: "public", table: "order_items" },
+          { event: "UPDATE", schema: "sck", table: "order_items" },
           handleChange
         )
         .on(
           "postgres_changes",
-          { event: "DELETE", schema: "public", table: "order_items" },
+          { event: "DELETE", schema: "sck", table: "order_items" },
           handleChange
         );
     }

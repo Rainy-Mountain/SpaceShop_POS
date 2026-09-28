@@ -327,7 +327,7 @@ export default function CustomerOrderBoard() {
         "postgres_changes",
         {
           event: "UPDATE",
-          schema: "public",
+          schema: "sck",
           table: "queues",
           filter: `id=eq.${activeQueueId}`,
         },
@@ -348,7 +348,7 @@ export default function CustomerOrderBoard() {
       )
       .on(
         "postgres_changes",
-        { event: "UPDATE", schema: "public", table: "queues" },
+        { event: "UPDATE", schema: "sck", table: "queues" },
         (payload) => {
           const next = (payload.new ?? {}) as {
             id?: string;
@@ -513,7 +513,7 @@ export default function CustomerOrderBoard() {
       .channel("realtime:order-inventory")
       .on(
         "postgres_changes",
-        { event: "*", schema: "public", table: "inventory" },
+        { event: "*", schema: "sck", table: "inventory" },
         (payload) => {
           const next = (payload.new ?? {}) as {
             product_id?: string;
@@ -850,7 +850,7 @@ export default function CustomerOrderBoard() {
         "postgres_changes",
         {
           event: "UPDATE",
-          schema: "public",
+          schema: "sck",
           table: "orders",
           filter: `queue_id=eq.${activeQueueId}`,
         },
@@ -867,7 +867,7 @@ export default function CustomerOrderBoard() {
         "postgres_changes",
         {
           event: "UPDATE",
-          schema: "public",
+          schema: "sck",
           table: "orders",
         },
         (payload) => {

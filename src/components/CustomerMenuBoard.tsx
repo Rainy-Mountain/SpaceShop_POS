@@ -278,7 +278,7 @@ export default function CustomerMenuBoard() {
       .channel("realtime:public-menu")
       .on(
         "postgres_changes",
-        { event: "*", schema: "public", table: "inventory" },
+        { event: "*", schema: "sck", table: "inventory" },
         (payload) => {
           const next = (payload.new ?? {}) as {
             product_id?: string;

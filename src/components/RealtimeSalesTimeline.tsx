@@ -142,7 +142,7 @@ export default function RealtimeSalesTimeline() {
       .channel("realtime:sales-timeline-grid")
       .on(
         "postgres_changes",
-        { event: "*", schema: "public", table: "sales_logs" },
+        { event: "*", schema: "sck", table: "sales_logs" },
         () => {
           if (debounceTimer != null) window.clearTimeout(debounceTimer);
           debounceTimer = window.setTimeout(() => {
