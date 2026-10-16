@@ -23,6 +23,8 @@ node_modules
 # misc
 .DS_Store
 *.pem
+*.swp
+*.swo
 
 # debug
 npm-debug.log*
@@ -32,8 +34,9 @@ yarn-error.log*
 
 # env files — 시크릿/로컬 설정이 배포에 포함되지 않도록
 .env
-.env.local
-.env*.local
+.env.*
+!.env.example
+!.env.*.example
 
 # typescript
 *.tsbuildinfo
