@@ -8,9 +8,9 @@ begin
     from pg_constraint
     where conname = 'orders_queue_id_fkey'
   ) then
-    alter table public.orders
+    alter table sck.orders
       add constraint orders_queue_id_fkey
-      foreign key (queue_id) references public.queues(id)
+      foreign key (queue_id) references sck.queues(id)
       on delete set null;
   end if;
 exception
@@ -27,9 +27,9 @@ begin
     from pg_constraint
     where conname = 'sales_logs_order_id_fkey'
   ) then
-    alter table public.sales_logs
+    alter table sck.sales_logs
       add constraint sales_logs_order_id_fkey
-      foreign key (order_id) references public.orders(id)
+      foreign key (order_id) references sck.orders(id)
       on delete set null;
   end if;
 exception

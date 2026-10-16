@@ -1,9 +1,10 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import ToastStack, { useToasts } from "@/components/ToastStack";
 import { useEventDay } from "@/hooks/useEventDay";
 import { fetchInventoryDashboardData } from "@/lib/fetchInventory";
+import { normalizeSaleItems, savedPaymentAttempt } from "@/lib/paymentActions";
 import { checkoutKioskCart } from "@/lib/inventoryActions";
 import {
   getBrandInitialKey,
@@ -340,6 +341,8 @@ export default function KioskBoard() {
   const [selectedInitial, setSelectedInitial] = useState<string | null>(null);
   const [selectedBrand, setSelectedBrand] = useState<string | null>(null);
   const [checkingOut, setCheckingOut] = useState(false);
+  const checkoutLock = useRef(false);
+  const attempt = useRef<{ fingerprint: string; id: string } | null>(null);
   const [isCartOpen, setIsCartOpen] = useState(false);
   const [pendingOrders, setPendingOrders] = useState<PendingPosOrder[]>([]);
   const [activeSmartOrderId, setActiveSmartOrderId] = useState<string | null>(
@@ -784,7 +787,8 @@ export default function KioskBoard() {
   }
 
   async function handleCheckout() {
-    if (cart.length === 0 || checkingOut) return;
+    if (cart.length === 0 || checkoutLock.current) return;
+    checkoutLock.current = true;
 
     // 결제 직전 스냅샷 — Realtime 재고 이벤트가 cart를 건드리지 못하게 고정
     const cartSnapshot = cart.map((item) => ({
@@ -811,11 +815,18 @@ export default function KioskBoard() {
         setIsCartOpen(false);
         pushToast(`✅ ${label} 결제 완료!`, "success");
       } else {
+        const fingerprint = JSON.stringify([eventDay, normalizeSaleItems(
+          cartSnapshot.map((item) => ({ ...item, soldFrom: "창고" as const }))
+        )]);
+        attempt.current = savedPaymentAttempt(window.sessionStorage, "spaceshop:checkout", fingerprint);
         await checkoutKioskCart({
+          paymentId: attempt.current.id,
           dayNumber: eventDay,
           items: cartSnapshot,
         });
 
+        attempt.current = null;
+        window.sessionStorage.removeItem("spaceshop:checkout");
         const count = cartSnapshot.length;
         setCart([]);
         setIsCartOpen(false);
@@ -828,6 +839,7 @@ export default function KioskBoard() {
       alert(message);
       void loadProducts({ silent: true });
     } finally {
+      checkoutLock.current = false;
       setCheckingOut(false);
     }
   }

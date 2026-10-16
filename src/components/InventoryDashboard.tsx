@@ -191,7 +191,11 @@ function InventoryRealtimeSync({
           }
 
           if (payload.eventType === "UPDATE") {
-            // 통계는 위에서 refetch. 목록/토스트는 DELETE에서 처리.
+            // 취소는 이력 삭제 대신 voided_at을 기록하므로 다른 기기의 활동 목록도 제거한다.
+            const changed = payload.new as { id?: string; voided_at?: string | null };
+            if (changed.voided_at && changed.id) {
+              removeActivityByIdRef.current(changed.id);
+            }
             return;
           }
         }

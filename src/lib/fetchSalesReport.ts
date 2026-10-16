@@ -1,3 +1,5 @@
+import { fetchAllRows, fetchIdBatches } from "@/lib/fetchAllRows";
+import { paymentKey } from "@/lib/paymentIdentity";
 import { supabase } from "@/lib/supabase";
 import type { EventDay, StockLocation } from "@/types/dashboard";
 import type {
@@ -17,11 +19,7 @@ function toNumber(value: unknown): number {
   return 0;
 }
 
-function normalizeJoinedRelation<T extends object>(value: unknown): T | null {
-  if (!value) return null;
-  if (Array.isArray(value)) return (value[0] as T) ?? null;
-  return value as T;
-}
+
 
 function isPlaceholderGuest(value: string): boolean {
   return (
@@ -84,194 +82,47 @@ function resolveGuestFromSources(options: {
   };
 }
 
-async function fetchQueuesByIds(
-  queueIds: string[]
-): Promise<Map<string, QueueGuestRow>> {
-  const map = new Map<string, QueueGuestRow>();
-  if (queueIds.length === 0) return map;
-
-  const { data, error } = await supabase
-    .from("queues")
-    .select("id, queue_number, customer_name")
-    .in("id", queueIds);
-
-  if (error) {
-    console.error("[fetchQueuesByIds]", error.message);
-    return map;
-  }
-
-  for (const row of data ?? []) {
-    map.set(String(row.id), {
-      queue_number: row.queue_number as number | null,
-      customer_name: row.customer_name as string | null,
-    });
-  }
-  return map;
+async function fetchQueuesByIds(queueIds: string[]): Promise<Map<string, QueueGuestRow>> {
+  const rows = await fetchIdBatches<Record<string, unknown>>(queueIds, (ids) =>
+    supabase.from("queues").select("id, queue_number, customer_name").in("id", ids)
+  );
+  return new Map(rows.map((row) => [String(row.id), {
+    queue_number: row.queue_number as number | null,
+    customer_name: row.customer_name as string | null,
+  }]));
 }
 
-/**
- * orders → queues(queue_number, customer_name) 조인
- * Relation/FK 에러 시 queue_id로 queues 수동 조회
- */
-async function fetchGuestInfoByOrderIds(
-  orderIds: string[]
-): Promise<Map<string, GuestInfo>> {
-  const map = new Map<string, GuestInfo>();
-  if (orderIds.length === 0) return map;
-
-  const { data, error } = await supabase
-    .from("orders")
-    .select(
-      "id, customer_name, queue_number, queue_id, queues ( queue_number, customer_name )"
-    )
-    .in("id", orderIds);
-
-  if (
-    error &&
-    /queues|relationship|foreign key|schema cache|could not find/i.test(
-      error.message
-    )
-  ) {
-    const plain = await supabase
-      .from("orders")
-      .select("id, customer_name, queue_number, queue_id")
-      .in("id", orderIds);
-
-    if (plain.error) {
-      console.error("[fetchGuestInfoByOrderIds]", plain.error.message);
-      return map;
-    }
-
-    const queueIds = [
-      ...new Set(
-        (plain.data ?? [])
-          .map((row) => (row.queue_id ? String(row.queue_id) : ""))
-          .filter(Boolean)
-      ),
-    ];
-    const queueById = await fetchQueuesByIds(queueIds);
-
-    for (const row of plain.data ?? []) {
-      const queueId = row.queue_id ? String(row.queue_id) : null;
-      map.set(
-        String(row.id),
-        resolveGuestFromSources({
-          queues: queueId ? queueById.get(queueId) ?? null : null,
-          orderCustomerName: row.customer_name,
-          orderQueueNumber: row.queue_number,
-          queueId,
-        })
-      );
-    }
-    return map;
-  }
-
-  if (error) {
-    console.error("[fetchGuestInfoByOrderIds]", error.message);
-    return map;
-  }
-
-  for (const row of data ?? []) {
-    const queues = normalizeJoinedRelation<QueueGuestRow>(
-      (row as { queues?: unknown }).queues
-    );
-    map.set(
-      String(row.id),
-      resolveGuestFromSources({
-        queues,
-        orderCustomerName: row.customer_name,
-        orderQueueNumber: row.queue_number,
-        queueId: row.queue_id ? String(row.queue_id) : null,
-      })
-    );
-  }
-  return map;
+async function fetchGuestInfoByOrderIds(orderIds: string[]): Promise<Map<string, GuestInfo>> {
+  const rows = await fetchIdBatches<Record<string, unknown>>(orderIds, (ids) =>
+    supabase.from("orders").select("id, customer_name, queue_number, queue_id").in("id", ids)
+  );
+  const queueIds = rows.map((row) => String(row.queue_id ?? "")).filter(Boolean);
+  const queues = await fetchQueuesByIds(queueIds);
+  return new Map(rows.map((row) => {
+    const queueId = row.queue_id ? String(row.queue_id) : null;
+    return [String(row.id), resolveGuestFromSources({
+      queues: queueId ? queues.get(queueId) : null,
+      orderCustomerName: row.customer_name, orderQueueNumber: row.queue_number, queueId,
+    })];
+  }));
 }
 
 export async function fetchSaleLogsWithProducts(
   dayNumber?: EventDay
 ): Promise<SaleLogWithProduct[]> {
-  const selectWithGuest =
-    "id, product_id, day_number, sold_from, quantity, total_price, created_at, payment_group_id, order_id, queue_id, guest_customer_name, guest_queue_number";
-  const selectFull =
-    "id, product_id, day_number, sold_from, quantity, total_price, created_at, payment_group_id, order_id, queue_id";
-  const selectWithOrder =
-    "id, product_id, day_number, sold_from, quantity, total_price, created_at, payment_group_id, order_id";
-  const selectLegacy =
-    "id, product_id, day_number, sold_from, quantity, total_price, created_at";
-
-  let salesQuery = supabase
-    .from("sales_logs")
-    .select(selectWithGuest)
-    .order("created_at", { ascending: false })
-    .limit(1000);
-
-  if (dayNumber != null) {
-    salesQuery = salesQuery.eq("day_number", dayNumber);
-  }
-
-  let salesResult = await salesQuery;
-
-  if (
-    salesResult.error &&
-    /guest_customer_name|guest_queue_number|schema cache|could not find/i.test(
-      salesResult.error.message
-    )
-  ) {
-    let q = supabase
-      .from("sales_logs")
-      .select(selectFull)
-      .order("created_at", { ascending: false })
-      .limit(1000);
-    if (dayNumber != null) q = q.eq("day_number", dayNumber);
-    salesResult = await q;
-  }
-
-  if (
-    salesResult.error &&
-    /queue_id|schema cache|could not find/i.test(salesResult.error.message)
-  ) {
-    let q = supabase
-      .from("sales_logs")
-      .select(selectWithOrder)
-      .order("created_at", { ascending: false })
-      .limit(1000);
-    if (dayNumber != null) q = q.eq("day_number", dayNumber);
-    salesResult = await q;
-  }
-
-  if (
-    salesResult.error &&
-    /payment_group_id|order_id|schema cache|could not find/i.test(
-      salesResult.error.message
-    )
-  ) {
-    let q = supabase
-      .from("sales_logs")
-      .select(selectLegacy)
-      .order("created_at", { ascending: false })
-      .limit(1000);
-    if (dayNumber != null) q = q.eq("day_number", dayNumber);
-    salesResult = await q;
-  }
-
-  const productsResult = await supabase
-    .from("products")
-    .select("id, name, brand, company_type, price");
-
-  if (salesResult.error) {
-    throw new Error(
-      salesResult.error.message || "판매 기록을 불러오지 못했습니다."
-    );
-  }
-
-  if (productsResult.error) {
-    throw new Error(
-      productsResult.error.message || "제품 정보를 불러오지 못했습니다."
-    );
-  }
-
-  const rows = salesResult.data ?? [];
+  const columns = "id, product_id, day_number, sold_from, quantity, total_price, created_at, payment_group_id, order_id, queue_id, guest_customer_name, guest_queue_number";
+  const [rows, products] = await Promise.all([
+    fetchAllRows<Record<string, unknown>>((from, to) => {
+      let query = supabase.from("sales_logs").select(columns).is("voided_at", null)
+        .order("created_at", { ascending: false }).order("id").range(from, to);
+      if (dayNumber != null) query = query.eq("day_number", dayNumber);
+      return query;
+    }),
+    fetchAllRows<Record<string, unknown>>((from, to) =>
+      supabase.from("products").select("id, name, brand, company_type, price")
+        .order("id").range(from, to)
+    ),
+  ]);
 
   const orderIds = [
     ...new Set(
@@ -301,7 +152,7 @@ export async function fetchSaleLogsWithProducts(
   ]);
 
   const productMap = new Map(
-    (productsResult.data ?? []).map((product) => [
+    products.map((product) => [
       String(product.id),
       {
         name: String(product.name ?? "-"),
@@ -373,16 +224,7 @@ export async function fetchSaleLogsWithProducts(
   });
 }
 
-function paymentGroupKey(log: SaleLogWithProduct): string {
-  if (log.paymentGroupId) return `pg:${log.paymentGroupId}`;
-  if (log.orderId) return `ord:${log.orderId}`;
-  if (log.queueId) return `q:${log.queueId}:${log.createdAt.slice(0, 19)}`;
-  const t = new Date(log.createdAt);
-  if (!Number.isNaN(t.getTime())) {
-    return `ts:${t.toISOString().slice(0, 19)}`;
-  }
-  return `id:${log.id}`;
-}
+
 
 /** 판매 로그를 결제(영수증) 단위로 그룹화 */
 export function groupSalesByPayment(
@@ -391,7 +233,7 @@ export function groupSalesByPayment(
   const map = new Map<string, SalePaymentGroup>();
 
   for (const log of logs) {
-    const key = paymentGroupKey(log);
+    const key = paymentKey(log);
     const existing = map.get(key);
     const item = {
       saleId: log.id,

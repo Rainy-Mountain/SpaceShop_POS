@@ -292,39 +292,11 @@ export async function fetchExistingProductsForMatch(): Promise<
 }
 
 async function addInventoryQty(
-  productId: string,
-  addBackup: number,
-  addStorage: number
+  productId: string, addBackup: number, addStorage: number
 ): Promise<void> {
-  const { data: current, error: findError } = await supabase
-    .from("inventory")
-    .select("backup_qty, storage_qty, display_qty")
-    .eq("product_id", productId)
-    .maybeSingle();
-
-  if (findError) throw new Error(findError.message);
-
-  if (!current) {
-    const { error } = await supabase.from("inventory").insert({
-      product_id: productId,
-      backup_qty: addBackup,
-      storage_qty: addStorage,
-      display_qty: 0,
-      last_updated: new Date().toISOString(),
-    });
-    if (error) throw new Error(error.message);
-    return;
-  }
-
-  const { error } = await supabase
-    .from("inventory")
-    .update({
-      backup_qty: (Number(current.backup_qty) || 0) + addBackup,
-      storage_qty: (Number(current.storage_qty) || 0) + addStorage,
-      last_updated: new Date().toISOString(),
-    })
-    .eq("product_id", productId);
-
+  const { error } = await supabase.rpc("add_inventory", {
+    p_product_id: productId, p_backup: addBackup, p_storage: addStorage,
+  });
   if (error) throw new Error(error.message);
 }
 

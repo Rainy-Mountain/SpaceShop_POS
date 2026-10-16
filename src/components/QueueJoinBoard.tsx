@@ -3,8 +3,7 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { useRouter } from "next/navigation";
 import { ShaderGradientCanvas, ShaderGradient } from "@shadergradient/react";
-import { fetchStoreSettings } from "@/lib/storeSettings";
-import { supabase } from "@/lib/supabase";
+import { registerQueue, queueClientToken } from "@/lib/queueActions";
 
 const PHONE_TAIL_RE = /^\d{4}$/;
 
@@ -13,7 +12,7 @@ const SHADER_GRADIENT_URL =
   "https://www.shadergradient.co/customize?animate=on&axesHelper=off&brightness=1&cAzimuthAngle=180&cDistance=5.11&cPolarAngle=90&cameraZoom=1&color1=%235498ff&color2=%23dbc0b6&color3=%233967ac&destination=onCanvas&embedMode=off&envPreset=city&format=gif&fov=45&frameRate=10&gizmoHelper=hide&grain=on&lightType=3d&pixelDensity=1&positionX=-1.4&positionY=0&positionZ=0&range=enabled&rangeEnd=26.5&rangeStart=0&reflection=0.1&rotationX=0&rotationY=10&rotationZ=50&shader=defaults&type=plane&uAmplitude=1&uDensity=1.3&uFrequency=5.5&uSpeed=0.3&uStrength=4&uTime=0&wireframe=false";
 
 /**
- * 손님용 — 핸드폰 뒷자리 4자리로 이어하기 또는 신규 순번 발급 → /order?queue_id=…
+ * 손님용 — 번호 뒷자리 입력 후 기기 토큰으로 이어하기/신규 등록 → /order?queue_id=…
  */
 export default function QueueJoinBoard() {
   const router = useRouter();
@@ -43,67 +42,11 @@ export default function QueueJoinBoard() {
     setError(null);
 
     try {
-      // 1) 동일 뒷자리 + 미완료(completed/cancelled 제외) 대기열 → 이어하기
-      const { data: existing, error: existingError } = await supabase
-        .from("queues")
-        .select("id, status")
-        .eq("customer_name", digits)
-        .neq("status", "completed")
-        .neq("status", "cancelled")
-        .order("created_at", { ascending: false })
-        .limit(1)
-        .maybeSingle();
+      // 같은 기기에서 발급한 토큰으로만 이어한다. 번호 뒷자리는 식별자가 아니다.
+      const token = queueClientToken(digits, window.localStorage);
+      const queueId = await registerQueue(digits, token);
 
-      if (existingError) throw existingError;
-
-      if (existing?.id) {
-        router.push(`/order?queue_id=${existing.id}`);
-        return;
-      }
-
-      // 2) 자동 입장 모드 확인
-      let initialStatus: "waiting" | "entered" = "waiting";
-      try {
-        const settings = await fetchStoreSettings();
-        if (settings.autoEnter) {
-          initialStatus = "entered";
-        }
-      } catch (settingsErr) {
-        console.warn(
-          "[QueueJoinBoard] store_settings 조회 실패 — waiting 유지",
-          settingsErr
-        );
-      }
-
-      // 3) 신규 발급
-      const { data: maxRows, error: maxError } = await supabase
-        .from("queues")
-        .select("queue_number")
-        .order("queue_number", { ascending: false })
-        .limit(1);
-
-      if (maxError) throw maxError;
-
-      const maxNumber =
-        maxRows && maxRows.length > 0
-          ? Number(maxRows[0].queue_number) || 0
-          : 0;
-      const nextNumber = maxNumber + 1;
-
-      const { data, error: insertError } = await supabase
-        .from("queues")
-        .insert({
-          queue_number: nextNumber,
-          customer_name: digits,
-          status: initialStatus,
-        })
-        .select("id")
-        .single();
-
-      if (insertError) throw insertError;
-      if (!data?.id) throw new Error("순번 발급에 실패했습니다.");
-
-      router.push(`/order?queue_id=${data.id}`);
+      router.push(`/order?queue_id=${queueId}`);
     } catch (err) {
       const message =
         err instanceof Error

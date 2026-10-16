@@ -32,6 +32,7 @@ async function fetchLatestSaleEventDay(): Promise<EventDay | null> {
   const { data, error } = await supabase
     .from("sales_logs")
     .select("day_number")
+    .is("voided_at", null)
     .order("created_at", { ascending: false })
     .limit(1)
     .maybeSingle();

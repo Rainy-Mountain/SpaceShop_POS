@@ -42,13 +42,14 @@ export default function ExcelUpload() {
     setProgress({ ...next });
 
     if (next.status === "processing") return;
+    const status = next.status;
 
     setLogs((prev) => {
       const item: UploadLogItem = {
         key: `${next.current}-${next.productName}-${next.status}`,
         index: next.current,
         productName: next.productName,
-        status: next.status,
+        status,
         message: next.message,
       };
       return [item, ...prev].slice(0, 50);

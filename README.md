@@ -1,30 +1,53 @@
-# SpaceShop Inventory
+# SpaceShop POS
 
-행사용 재고 관리 웹앱 — 엑셀 드래그 앤 드롭 업로드.
+행사용 상품·재고 관리, 고객 대기열, 스마트 주문, POS 판매 확정, 실시간 매출, 정산 PDF를 제공하는 Next.js + Supabase 앱입니다. 카드 PG 승인 연동은 포함하지 않습니다.
 
-## Setup
+## 설치와 DB 적용
 
-1. Node.js 설치 후 의존성 설치
+Node.js 22 이상을 사용합니다.
 
 ```bash
-npm install
+npm ci
 ```
 
-2. `.env.local` 설정 (예시: `.env.local.example`)
-
-```env
-NEXT_PUBLIC_SUPABASE_URL=your-supabase-project-url
-NEXT_PUBLIC_SUPABASE_ANON_KEY=your-supabase-anon-key
-```
-
-3. (선택) `supabase/schema.sql`을 Supabase SQL Editor에서 실행
-
-4. 개발 서버 실행
+1. `.env.local.example`을 복사해 `.env.local`을 작성합니다.
+2. 새 Supabase 프로젝트라면 `supabase/schema.sql`을 실행합니다. 기존 프로젝트에서는 초기 스키마를 다시 만들지 않습니다.
+3. **새 프로젝트와 기존 프로젝트 모두** `supabase/migrations/20261016_core_integrity.sql`을 SQL Editor에서 실행합니다. 새 앱 코드 배포보다 SQL 적용이 먼저입니다.
+4. 앱은 `sck` 스키마를 사용합니다. Supabase Data API의 노출 스키마, 기존 테이블 권한, RLS 정책, Realtime publication 설정을 확인합니다.
+5. 아래 명령으로 실행합니다.
 
 ```bash
 npm run dev
 ```
 
-## Excel columns
+마이그레이션은 데이터를 일괄 삭제하거나 테이블의 공개 권한을 추가하지 않습니다. 대기 번호에 기존 중복이 있으면 유일 인덱스 생성 단계에서 전체 적용이 중단됩니다. `sck.queues`의 중복을 확인해 운영 데이터 기준으로 정리한 뒤 다시 실행하세요. 고객 번호나 이력을 임의로 재배정하지 않습니다.
 
-| 브랜드 | 제품명 | 구분 | 가격 | 백업재고 | 창고재고 | 진열재고 |
+```sql
+select queue_number, count(*) from sck.queues
+group by queue_number having count(*) > 1;
+```
+
+## 핵심 데이터 처리
+
+- `complete_sale`: 상품·재고 행을 일정한 순서로 잠그고, 재고 차감·주문 완료·매출 기록을 한 트랜잭션으로 처리합니다. 가격은 DB 값으로 검증합니다.
+- 결제 ID를 재시도에 재사용합니다. 성공 후 응답이 유실되어도 같은 요청이 재고를 다시 차감하지 않습니다. 실패한 요청을 다른 내용으로 바꾸면 새로운 ID를 사용합니다.
+- `void_sales`: 매출을 삭제하지 않고 취소 표시를 남깁니다. 재고 복구와 취소 기록은 함께 성공하거나 함께 롤백됩니다. 집계에서는 취소된 기록을 제외합니다.
+- `register_queue`: DB에서 순번을 발급하고, 같은 기기의 고객 토큰으로만 이어하기를 허용합니다. 전화번호 뒷자리만 같은 다른 고객은 별개로 등록합니다.
+- 정산 건수는 `payment_group_id`, 주문 ID 순으로 식별합니다. 식별자가 없는 과거 행은 각각 집계하며, 시각만으로 합치지 않습니다.
+- 엑셀 업로드는 재고를 **덮어쓰고**, 텍스트 붙여넣기는 기존 재고에 **더합니다**. 운영 재고가 변경된 이후 엑셀을 재업로드할 때는 주의해야 합니다.
+
+## 검증
+
+```bash
+npm test
+npm run typecheck
+npm run build
+```
+
+테스트는 로컬 메모리 PostgreSQL 엔진(PGlite)을 사용하며, 실제 Supabase의 데이터나 키가 필요하지 않습니다. 실패 시 전체 롤백, 재시도, 취소, 가격 검증, 행 제한, 대기열 식별을 검증합니다. PGlite는 연결을 직렬화하므로 여러 실제 PostgreSQL 연결이 경쟁하는 상황의 잠금 대기·교착 검증은 운영과 분리한 PostgreSQL 환경에서 추가로 수행해야 합니다.
+
+## 운영 전 남은 작업
+
+이 변경은 관리자 로그인과 역할별 RLS 정책을 도입하지 않습니다. RPC는 `SECURITY INVOKER`로 실행하므로 기존 테이블 권한과 RLS를 우회하지 않습니다. 관리자/고객 권한 분리, 고객 주문별 접근 제어, 주류 인식 API 인증·호출 제한은 실제 운영 전에 구성해야 합니다. 기기 토큰은 같은 번호 뒷자리의 주문 충돌을 방지하는 수단이며, DB 접근 권한을 대신하지 않습니다.
+
+발표용 핵심 코드와 검증 사례는 [코드 설명](docs/core-code-walkthrough.md)에 정리했습니다.

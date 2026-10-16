@@ -1,7 +1,8 @@
 "use client";
 
-import { useMemo, useState, type FormEvent } from "react";
+import { useMemo, useRef, useState, type FormEvent } from "react";
 import Modal from "@/components/Modal";
+import { savedPaymentAttempt } from "@/lib/paymentActions";
 import { registerSale } from "@/lib/inventoryActions";
 import {
   LOCATION_LABELS,
@@ -41,6 +42,8 @@ export default function SaleModal({
   const [soldFrom, setSoldFrom] = useState<"창고" | "차량">("창고");
   const [quantity, setQuantity] = useState("1");
   const [submitting, setSubmitting] = useState(false);
+  const submitLock = useRef(false);
+  const attempt = useRef<{ fingerprint: string; id: string } | null>(null);
 
   const qtyNumber = Number(quantity);
   const totalPrice = useMemo(() => {
@@ -48,11 +51,10 @@ export default function SaleModal({
     return row.price * qtyNumber;
   }, [row, qtyNumber]);
 
-  const availableQty = row ? getLocationQty(row, soldFrom) : 0;
 
   async function handleSubmit(event: FormEvent) {
     event.preventDefault();
-    if (!row) return;
+    if (!row || submitLock.current) return;
 
     const qty = Number(quantity);
 
@@ -61,16 +63,15 @@ export default function SaleModal({
       return;
     }
 
-    if (availableQty < qty) {
-      alert(
-        `${LOCATION_LABELS[soldFrom]} 재고가 부족합니다. (현재 ${availableQty}개)`
-      );
-      return;
-    }
-
+    // 표시 재고가 줄어 있어도 응답 유실 후 같은 결제를 재확인할 수 있어야 한다.
+    // 최종 재고 검증과 중복 요청 판정은 DB 트랜잭션에서 수행한다.
+    submitLock.current = true;
     setSubmitting(true);
     try {
+      attempt.current = savedPaymentAttempt(window.sessionStorage, "spaceshop:sale",
+        JSON.stringify([row.id, eventDay, soldFrom, qty, row.price]));
       await registerSale({
+        paymentGroupId: attempt.current.id,
         productId: row.id,
         dayNumber: eventDay,
         soldFrom,
@@ -81,6 +82,8 @@ export default function SaleModal({
         productName: row.name,
         quantity: qty,
       });
+      attempt.current = null;
+      window.sessionStorage.removeItem("spaceshop:sale");
       setSoldFrom("창고");
       setQuantity("1");
       onClose();
@@ -89,6 +92,7 @@ export default function SaleModal({
         error instanceof Error ? error.message : "판매 등록에 실패했습니다.";
       alert(message);
     } finally {
+      submitLock.current = false;
       setSubmitting(false);
     }
   }

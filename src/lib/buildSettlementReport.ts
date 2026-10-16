@@ -1,3 +1,4 @@
+import { countPayments } from "@/lib/paymentIdentity";
 import { fetchSaleLogsWithProducts } from "@/lib/fetchSalesReport";
 import type { EventDay } from "@/types/dashboard";
 import type { SaleLogWithProduct } from "@/types/salesReport";
@@ -36,21 +37,7 @@ function formatGeneratedAt(date = new Date()): string {
   return `${y}.${m}.${d} ${hh}:${mm}`;
 }
 
-/** 동일 시각(초 단위) 배치 INSERT를 한 결제 건으로 집계 */
-function countPayments(logs: SaleLogWithProduct[]): number {
-  const keys = new Set<string>();
-  for (const log of logs) {
-    const t = new Date(log.createdAt);
-    if (Number.isNaN(t.getTime())) {
-      keys.add(log.id);
-      continue;
-    }
-    keys.add(
-      `${t.getFullYear()}-${t.getMonth()}-${t.getDate()}-${t.getHours()}-${t.getMinutes()}-${t.getSeconds()}`
-    );
-  }
-  return keys.size;
-}
+
 
 function aggregateLines(logs: SaleLogWithProduct[]): SettlementLineItem[] {
   const map = new Map<string, SettlementLineItem>();

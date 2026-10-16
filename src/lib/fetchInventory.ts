@@ -1,3 +1,4 @@
+import { fetchAllRows } from "@/lib/fetchAllRows";
 import { supabase } from "@/lib/supabase";
 import type {
   DashboardRow,
@@ -76,23 +77,10 @@ async function fetchSalesByDayAggregation(): Promise<{
   byProduct: Map<string, ProductDaySales>;
   totals: SalesTotals;
 }> {
-  const { data, error } = await supabase
-    .from("sales_logs")
-    .select("product_id, quantity, total_price, day_number");
-
-  if (error) {
-    console.error("sales_logs 조회 실패:", error.message);
-    return {
-      byProduct: new Map(),
-      totals: {
-        quantity: 0,
-        revenue: 0,
-        day1Quantity: 0,
-        day2Quantity: 0,
-        day3Quantity: 0,
-      },
-    };
-  }
+  const data = await fetchAllRows<Record<string, unknown>>((from, to) =>
+    supabase.from("sales_logs").select("id, product_id, quantity, total_price, day_number")
+      .is("voided_at", null).order("id").range(from, to)
+  );
 
   const byProduct = new Map<string, ProductDaySales>();
   let quantity = 0;
@@ -156,26 +144,17 @@ export async function fetchInventoryDashboardData(
 ): Promise<InventoryDashboardData> {
   const orderBy = options?.orderBy ?? "brand";
 
-  let productsQuery = supabase.from("products").select("*, inventory(*)");
-
-  if (orderBy === "created") {
-    productsQuery = productsQuery.order("created_at", { ascending: true });
-  } else {
-    productsQuery = productsQuery
-      .order("brand", { ascending: true })
-      .order("name", { ascending: true });
-  }
-
-  const [{ data, error }, sales] = await Promise.all([
-    productsQuery,
+  const [products, sales] = await Promise.all([
+    fetchAllRows<ProductWithInventory>((from, to) => {
+      let query = supabase.from("products").select("*, inventory(*)");
+      query = orderBy === "created"
+        ? query.order("created_at", { ascending: true })
+        : query.order("brand", { ascending: true }).order("name", { ascending: true });
+      return query.order("id").range(from, to);
+    }),
     fetchSalesByDayAggregation(),
   ]);
 
-  if (error) {
-    throw new Error(error.message || "재고 데이터를 불러오지 못했습니다.");
-  }
-
-  const products = (data ?? []) as ProductWithInventory[];
   const rows = products.map((product) =>
     mapProductToRow(
       product,

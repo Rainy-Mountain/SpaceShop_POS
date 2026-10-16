@@ -93,7 +93,7 @@ function readCartFromStorage(queueId: string): CartItem[] | null {
     const parsed = JSON.parse(raw) as unknown;
     if (!Array.isArray(parsed)) return null;
     const items: CartItem[] = parsed
-      .map((row) => {
+      .map((row): CartItem | null => {
         const item = row as Partial<CartItem>;
         const productId = String(item.productId ?? "").trim();
         const qty = Number(item.qty) || 0;

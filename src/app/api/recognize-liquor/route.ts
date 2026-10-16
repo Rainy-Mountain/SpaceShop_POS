@@ -1,3 +1,4 @@
+import { fetchAllRows } from "@/lib/fetchAllRows";
 import { NextResponse } from "next/server";
 import { getSupabaseServer } from "@/lib/supabaseServer";
 
@@ -105,35 +106,11 @@ ${listJson}
 
 async function fetchEventProducts(): Promise<CatalogProduct[]> {
   const supabase = getSupabaseServer();
-  const pageSize = 1000;
-  const products: CatalogProduct[] = [];
-
-  for (let from = 0; ; from += pageSize) {
-    const { data, error } = await supabase
-      .from("products")
-      .select("id, name, price")
-      .order("name")
-      .range(from, from + pageSize - 1);
-
-    if (error) {
-      throw new Error(error.message || "products 조회에 실패했습니다.");
-    }
-
-    const rows = data ?? [];
-    for (const row of rows) {
-      const name = String(row.name ?? "").trim();
-      if (!name) continue;
-      products.push({
-        id: String(row.id),
-        name,
-        price: Number(row.price) || 0,
-      });
-    }
-
-    if (rows.length < pageSize) break;
-  }
-
-  return products;
+  const rows = await fetchAllRows<Record<string, unknown>>((from, to) =>
+    supabase.from("products").select("id, name, price").order("id").range(from, to)
+  );
+  return rows.map((row) => ({ id: String(row.id), name: String(row.name ?? "").trim(), price: Number(row.price) || 0 }))
+    .filter((row) => row.name);
 }
 
 function findCatalogProduct(

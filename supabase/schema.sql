@@ -1,3 +1,6 @@
+create schema if not exists sck;
+set search_path = sck, public;
+
 -- products / inventory / sales_logs / movement_logs 예시 스키마
 
 create table if not exists products (
@@ -94,7 +97,7 @@ create table if not exists orders (
   created_at timestamptz not null default now()
 );
 
--- 기존 DB: alter table public.orders add column if not exists total_price numeric not null default 0;
+-- 기존 DB: alter table sck.orders add column if not exists total_price numeric not null default 0;
 
 -- 기존 DB: shopping 상태 허용 (1회 실행)
 -- alter table orders drop constraint if exists orders_status_check;
