@@ -16,16 +16,18 @@ export function getSupabase(): SupabaseClient<any, "sck", any> {
   if (browserClient) return browserClient;
 
   const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-  const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+  const supabaseKey =
+    process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY ||
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
 
-  if (!supabaseUrl || !supabaseAnonKey) {
+  if (!supabaseUrl || !supabaseKey) {
     throw new Error(
-      "Missing NEXT_PUBLIC_SUPABASE_URL or NEXT_PUBLIC_SUPABASE_ANON_KEY"
+      "Missing NEXT_PUBLIC_SUPABASE_URL or NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY (legacy NEXT_PUBLIC_SUPABASE_ANON_KEY also supported)"
     );
   }
 
   // 재고·주문 표는 Supabase의 sck 공간에 있다 (같은 프로젝트의 TASTEMARK와 분리, 2026-09-29)
-  browserClient = createClient(supabaseUrl, supabaseAnonKey, { db: { schema: "sck" } });
+  browserClient = createClient(supabaseUrl, supabaseKey, { db: { schema: "sck" } });
   return browserClient;
 }
 

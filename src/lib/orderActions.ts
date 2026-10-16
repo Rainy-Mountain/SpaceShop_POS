@@ -11,62 +11,6 @@ export type CartItem = {
   price?: number;
 };
 
-/** pending 주문서에 담긴 제품별 대기 수량 합계 */
-export async function fetchPendingQtyByProduct(): Promise<Map<string, number>> {
-  const { data: pendingOrders, error: ordersError } = await supabase
-    .from("orders")
-    .select("id")
-    .eq("status", "pending");
-
-  if (ordersError) throw ordersError;
-
-  const orderIds = (pendingOrders ?? []).map((row) => row.id as string);
-  const map = new Map<string, number>();
-  if (orderIds.length === 0) return map;
-
-  const { data: items, error: itemsError } = await supabase
-    .from("order_items")
-    .select("product_id, quantity")
-    .in("order_id", orderIds);
-
-  if (itemsError) throw itemsError;
-
-  for (const item of items ?? []) {
-    const productId = String(item.product_id ?? "");
-    if (!productId) continue;
-    const qty = Number(item.quantity) || 0;
-    map.set(productId, (map.get(productId) ?? 0) + qty);
-  }
-
-  return map;
-}
-
-/**
- * 실제 재고 - pending 대기 수량 - 내 장바구니 수량
- * 담으려는 추가 수량을 반영했을 때 가능한지 검사
- */
-export function getAvailableQty(options: {
-  storageQty: number;
-  pendingQty: number;
-  cartQty: number;
-}): number {
-  return Math.max(
-    0,
-    options.storageQty - options.pendingQty - options.cartQty
-  );
-}
-
-export async function submitCustomerOrder(options: {
-  queueId: string;
-  items: CartItem[];
-}): Promise<{ orderId: string }> {
-  // 하위 호환: 즉시 pending 제출 (컨시어지 플로우에서는 syncShoppingCart + sendOrderToPos 사용)
-  const { orderId } = await syncShoppingCart(options.queueId, options.items);
-  if (!orderId) throw new Error("장바구니가 비어 있습니다.");
-  await sendOrderToPos(orderId);
-  return { orderId };
-}
-
 /**
  * 고객 장바구니 → orders(status=shopping) + order_items 실시간 UPSERT
  * 장바구니가 비면 shopping 주문/품목을 정리한다.
@@ -618,30 +562,6 @@ const NIL_UUID = "00000000-0000-0000-0000-000000000000";
 
 export const SMART_ORDER_TRUNCATE_HINT =
   "Supabase 대시보드의 SQL Editor에서 'TRUNCATE TABLE queues CASCADE;' 명령어를 실행해 주세요.";
-
-/** 손님 주문 수정 — queue의 pending 주문만 삭제 (order_items CASCADE) */
-export async function cancelPendingOrderByQueue(
-  queueId: string,
-  orderId?: string | null
-): Promise<void> {
-  if (!queueId) throw new Error("대기열 ID가 없습니다.");
-
-  let query = supabase
-    .from("orders")
-    .delete()
-    .eq("queue_id", queueId)
-    .eq("status", "pending");
-
-  if (orderId) {
-    query = query.eq("id", orderId);
-  }
-
-  const { error } = await query;
-  if (error) {
-    console.error("[cancelPendingOrderByQueue] 삭제 실패", error);
-    throw new Error(error.message || "주문 삭제에 실패했습니다.");
-  }
-}
 
 /** 대기열 1건 삭제 (orders / order_items CASCADE) */
 export async function deleteQueueEntry(queueId: string): Promise<void> {

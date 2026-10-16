@@ -7,10 +7,8 @@ import AppNav from "@/components/AppNav";
 /** iframe·손님용·스마트오더 경로 — 관리자 네비 숨김 */
 const PUBLIC_PREFIXES = [
   "/public-menu",
-  "/customer",
   "/queue",
   "/order",
-  "/smart-lens",
 ];
 
 export default function AppShell({ children }: { children: ReactNode }) {

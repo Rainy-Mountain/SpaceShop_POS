@@ -14,7 +14,8 @@ npm ci
 2. 새 Supabase 프로젝트라면 `supabase/schema.sql`을 실행합니다. 기존 프로젝트에서는 초기 스키마를 다시 만들지 않습니다.
 3. **새 프로젝트와 기존 프로젝트 모두** `supabase/migrations/20261016_core_integrity.sql`을 SQL Editor에서 실행합니다. 새 앱 코드 배포보다 SQL 적용이 먼저입니다.
 4. 앱은 `sck` 스키마를 사용합니다. Supabase Data API의 노출 스키마, 기존 테이블 권한, RLS 정책, Realtime publication 설정을 확인합니다.
-5. 아래 명령으로 실행합니다.
+5. **발표용 가짜 데이터만 넣는 테스트 프로젝트에 한해** `supabase/demo_access.sql`을 수동 실행할 수 있습니다. 이 설정은 공개용 키를 가진 로그인하지 않은 사용자에게도 앱의 테이블 8개에 대한 조회·등록·수정·삭제 권한을 줍니다. RLS나 기존 정책을 변경하지 않으므로, 이미 RLS가 활성화된 DB에서는 별도의 정책이 필요합니다. 실제 고객·매출 데이터를 사용하는 프로젝트에는 적용하지 마세요.
+6. 아래 명령으로 실행합니다.
 
 ```bash
 npm run dev

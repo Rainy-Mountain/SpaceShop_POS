@@ -167,9 +167,3 @@ export async function fetchInventoryDashboardData(
     salesTotals: sales.totals,
   };
 }
-
-/** @deprecated use fetchInventoryDashboardData */
-export async function fetchInventoryRows(): Promise<DashboardRow[]> {
-  const data = await fetchInventoryDashboardData();
-  return data.rows;
-}

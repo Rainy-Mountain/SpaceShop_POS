@@ -2,9 +2,6 @@ import type { EventDay } from "@/types/dashboard";
 
 export const EVENT_DAY_STORAGE_KEY = "currentDay";
 
-/** 행사 1일차 날짜 (YYYY-MM-DD). 미설정 시 캘린더 추론 생략 */
-export const EVENT_START_DATE_ENV = "NEXT_PUBLIC_EVENT_START_DATE";
-
 export function isEventDay(value: unknown): value is EventDay {
   return value === 1 || value === 2 || value === 3;
 }

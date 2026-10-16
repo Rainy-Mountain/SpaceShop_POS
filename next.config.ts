@@ -18,15 +18,6 @@ const nextConfig: NextConfig = {
           },
         ],
       },
-      {
-        source: "/customer",
-        headers: [
-          {
-            key: "Content-Security-Policy",
-            value: "frame-ancestors *",
-          },
-        ],
-      },
     ];
   },
 };
